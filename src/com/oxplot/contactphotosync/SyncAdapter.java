@@ -26,7 +26,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.MalformedURLException;
-import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Hashtable;
@@ -220,7 +219,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
             if (!serverEntryExists) {
               System.out.println("Insert to server:" + name);
 
-              URL feedUrl = new URL(
+              java.net.URL feedUrl = new java.net.URL(
                   "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
                       + photosAlbum.getGphotoId());
               serverEntry = picasaService.insert(feedUrl, serverEntry);
@@ -323,7 +322,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
     byte[] buffer = new byte[4096];
 
-    URL photoUrl = new URL(serverEntry.getMediaContents().get(0).getUrl());
+    java.net.URL photoUrl = new java.net.URL(serverEntry.getMediaContents()
+        .get(0).getUrl());
 
     InputStream serverIS = photoUrl.openStream();
     AssetFileDescriptor fd = getContext().getContentResolver()
@@ -357,7 +357,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       throws IOException, ServiceException {
     Hashtable<String, PhotoEntry> serverEntries = new Hashtable<String, PhotoEntry>();
 
-    URL feedUrl = new URL(
+    java.net.URL feedUrl = new java.net.URL(
         "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
             + photosAlbum.getGphotoId());
     AlbumFeed feed = picasaService.getFeed(feedUrl, AlbumFeed.class);
@@ -387,7 +387,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
         R.string.picasa_album);
 
     try {
-      URL feedUrl = new URL(
+      java.net.URL feedUrl = new java.net.URL(
           "https://picasaweb.google.com/data/feed/api/user/default?kind=album");
 
       UserFeed myUserFeed = picasaService.getFeed(feedUrl, UserFeed.class);
@@ -404,7 +404,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
         photosAlbum = new AlbumEntry();
         photosAlbum.setAccess("protected");
         photosAlbum.setTitle(new PlainTextConstruct(albumName));
-        URL postUrl = new URL(
+        java.net.URL postUrl = new java.net.URL(
             "https://picasaweb.google.com/data/feed/api/user/default");
         photosAlbum = picasaService.insert(postUrl, photosAlbum);
       }
