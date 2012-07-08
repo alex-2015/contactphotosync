@@ -39,7 +39,7 @@ public class SyncService extends Service {
   private static final String PREF_FILE = "default";
   private static final String FIRST_RUN_PREF_KEY = "first-run";
   private static final String PHOTO_PROVIDER = "com.oxplot.contactphotos";
-  private static long syncFreq = 60 * 60;
+  private static long syncFreq = 8 * 60 * 60; // Every 8 hours
 
   /*
    * {@inheritDoc}
