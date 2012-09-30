@@ -68,7 +68,8 @@ public class SyncService extends Service {
         prefsEditor.putBoolean(FIRST_RUN_PREF_KEY, true);
         prefsEditor.commit();
 
-        // Turn on our sync for all existing accounts when the program is first started
+        // Turn on our sync for all existing accounts when the program is first
+        // started
 
         for (Account account : manager.getAccountsByType(ACCOUNT_TYPE))
           ContentResolver.setSyncAutomatically(account, PHOTO_PROVIDER, true);

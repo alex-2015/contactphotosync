@@ -230,7 +230,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
               picasaService.getRequestFactory().setHeader("If-Match",
                   serverEntry.getEtag());
-              serverEntry = serverEntry.updateMedia(false);
+
+              // XXX throws NPE every now and then, can't be f!@#ed figuring
+              // why, so we just abort and try next time
+              try {
+                serverEntry = serverEntry.updateMedia(false);
+              } catch (NullPointerException e) {
+                e.printStackTrace();
+                syncResult.stats.numIoExceptions++;
+                return;
+              }
+
               picasaService.setHeader("If-Match", null);
               syncResult.stats.numUpdates++;
 
@@ -263,8 +273,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
           // Server -> Phone sync
           System.out.println("Server -> Phone for: " + name);
 
-          String newMD5 = toHex(updateLocalPhotoFromServer(serverEntry,
-              rawContactPhotoUri));
+          String newMD5 = updateLocalPhotoFromServer(serverEntry,
+              rawContactPhotoUri, md5Digest);
 
           String newSync = serverEntry.getEtag() + ":" + newMD5;
           ContentValues updateVals = new ContentValues();
@@ -311,14 +321,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
    * @return MD5 digest of the copy on Picasaweb.
    * @throws IOException
    */
-  private byte[] updateLocalPhotoFromServer(PhotoEntry serverEntry,
-      Uri rawContactPhotoUri) throws IOException {
-
-    MessageDigest md5 = null;
-    try {
-      md5 = MessageDigest.getInstance("MD5");
-    } catch (NoSuchAlgorithmException e) {
-    }
+  private String updateLocalPhotoFromServer(PhotoEntry serverEntry,
+      Uri rawContactPhotoUri, String existingLocalMD5) throws IOException {
 
     byte[] buffer = new byte[4096];
 
@@ -328,17 +332,47 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     InputStream serverIS = photoUrl.openStream();
     AssetFileDescriptor fd = getContext().getContentResolver()
         .openAssetFileDescriptor(rawContactPhotoUri, "w");
-    OutputStream photoDataStream = fd.createOutputStream();
+    OutputStream photoOutStream = fd.createOutputStream();
     int bytesRead;
-    md5.reset();
-    while ((bytesRead = serverIS.read(buffer)) > 0) {
-      photoDataStream.write(buffer, 0, bytesRead);
-      md5.update(buffer, 0, bytesRead);
-    }
-    photoDataStream.close();
+    while ((bytesRead = serverIS.read(buffer)) > 0)
+      photoOutStream.write(buffer, 0, bytesRead);
+    photoOutStream.close();
     fd.close();
 
-    return md5.digest();
+    // Read the local saved file again (it might have been changed by the
+    // provider) - try until you can read it
+
+    String md5Digest;
+
+    while (true) {
+
+      try {
+        fd = getContext().getContentResolver().openAssetFileDescriptor(
+            rawContactPhotoUri, "r");
+        InputStream photoInStream = fd.createInputStream();
+        md5Digest = toHex(getMD5DigestForStream(photoInStream));
+        photoInStream.close();
+        fd.close();
+        if (existingLocalMD5.equals(md5Digest))
+          System.out.println("Waiting for photo to be updated locally ...");
+        else
+          break;
+      } catch (FileNotFoundException e) {
+        System.err
+            .println("Opening the photo after writing failed! - Retrying ...");
+      }
+      
+      try {
+        Thread.sleep(100);
+      } catch (InterruptedException e1) {
+        // This should never happen
+        e1.printStackTrace();
+      }
+
+    }
+
+    return md5Digest;
+
   }
 
   /**
@@ -360,7 +394,15 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     java.net.URL feedUrl = new java.net.URL(
         "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
             + photosAlbum.getGphotoId());
-    AlbumFeed feed = picasaService.getFeed(feedUrl, AlbumFeed.class);
+    AlbumFeed feed = null;
+
+    // XXX throws NPE every now and then, can't be f!@#ed figuring why, so we
+    // just abort and try next time
+    try {
+      feed = picasaService.getFeed(feedUrl, AlbumFeed.class);
+    } catch (NullPointerException e) {
+      throw new IOException(e);
+    }
 
     for (GphotoEntry<PhotoEntry> e : feed.getEntries()) {
       PhotoEntry photo = new PhotoEntry(e);
@@ -389,8 +431,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     try {
       java.net.URL feedUrl = new java.net.URL(
           "https://picasaweb.google.com/data/feed/api/user/default?kind=album");
+      UserFeed myUserFeed = null;
 
-      UserFeed myUserFeed = picasaService.getFeed(feedUrl, UserFeed.class);
+      // XXX throws NPE every now and then, can't be f!@#ed figuring why, so we
+      // just abort and try next time
+      try {
+        myUserFeed = picasaService.getFeed(feedUrl, UserFeed.class);
+      } catch (NullPointerException e) {
+        throw new IOException(e);
+      }
+
       AlbumEntry photosAlbum = null;
       for (GphotoEntry<AlbumEntry> e : myUserFeed.getEntries()) {
         AlbumEntry album = new AlbumEntry(e);
