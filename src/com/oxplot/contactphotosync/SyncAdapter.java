@@ -59,6 +59,8 @@ import com.google.gdata.util.ServiceException;
 public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
   private static final String ACCOUNT_TYPE = "com.google";
+  private static final int SAVE_WAIT_MAX = 2000;
+  private static final int SAVE_WAIT_INT = 100;
 
   public SyncAdapter(Context context, boolean autoInitialize) {
     super(context, autoInitialize);
@@ -341,10 +343,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
     // Read the local saved file again (it might have been changed by the
     // provider) - try until you can read it
+    // UNELSS the server entry is updated because of changes to its metadata
+    // which means, the photo will be the same when saved. For now, just give up
+    // after 2s.
+    // TODO we need to save the checksum/timestamp and check against that
+    // instead of Etag
+    // TODO we also need to delete the local image first, before saving the new
+    // one in case the image hasn't changed
 
-    String md5Digest;
+    String md5Digest = null;
 
-    while (true) {
+    for (int i = 0; i < SAVE_WAIT_MAX / SAVE_WAIT_INT; i++) {
 
       try {
         fd = getContext().getContentResolver().openAssetFileDescriptor(
@@ -361,9 +370,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
         System.err
             .println("Opening the photo after writing failed! - Retrying ...");
       }
-      
+
       try {
-        Thread.sleep(100);
+        Thread.sleep(SAVE_WAIT_INT);
       } catch (InterruptedException e1) {
         // This should never happen
         e1.printStackTrace();
@@ -371,7 +380,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
     }
 
-    return md5Digest;
+    return md5Digest == null ? existingLocalMD5 : md5Digest;
 
   }
 
