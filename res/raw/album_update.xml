@@ -1,0 +1,12 @@
+<entry xmlns='http://www.w3.org/2005/Atom'
+    xmlns:media='http://search.yahoo.com/mrss/'
+    xmlns:gphoto='http://schemas.google.com/photos/2007'>
+  <title type='text'>%s</title>
+  <summary type='text'>%s</summary>
+  <gphoto:id>%s</gphoto:id>
+  <gphoto:access>%s</gphoto:access>
+  <gphoto:commentingEnabled>true</gphoto:commentingEnabled>
+  <gphoto:timestamp>%d</gphoto:timestamp>
+  <category scheme='http://schemas.google.com/g/2005#kind'
+    term='http://schemas.google.com/photos/2007#album'></category>
+</entry>

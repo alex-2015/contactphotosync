@@ -1,0 +1,15 @@
+<entry xmlns='http://www.w3.org/2005/Atom'
+ xmlns:exif='http://schemas.google.com/photos/exif/2007'
+ xmlns:gphoto='http://schemas.google.com/photos/2007'
+ xmlns:media='http://search.yahoo.com/mrss/'
+ xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/'
+ xmlns:gml='http://www.opengis.net/gml'
+ xmlns:georss='http://www.georss.org/georss'>
+  <gphoto:id>%s</gphoto:id>
+  <gphoto:album>%s</gphoto:album>
+  <title>%s</title>
+  <summary>%s</summary>
+  <gphoto:timestamp>%s</gphoto:timestamp>
+  <category scheme="http://schemas.google.com/g/2005#kind"
+    term="http://schemas.google.com/photos/2007#photo"/>
+</entry>
