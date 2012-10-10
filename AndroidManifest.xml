@@ -15,7 +15,8 @@
 
     <application
         android:icon="@drawable/icon"
-        android:label="@string/app_name" >
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Holo" >
         <provider
             android:name="com.oxplot.contactphotosync.PhotoProvider"
             android:authorities="com.oxplot.contactphotos"
@@ -38,6 +39,20 @@
                 android:name="android.content.SyncAdapter"
                 android:resource="@xml/syncadapter" />
         </service>
+
+        <activity
+            android:name=".AssignContactPhotoActivity"
+            android:label="@string/title_activity_assign_contact_photo" >
+        </activity>
+        <activity
+            android:name=".SelectAccountActivity"
+            android:label="@string/title_activity_assign_contact_photo" >
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>
