@@ -1,18 +1,28 @@
 package com.oxplot.contactphotosync;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.ContentUris;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Bitmap.CompressFormat;
+import android.graphics.Bitmap.Config;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapFactory.Options;
 import android.graphics.drawable.BitmapDrawable;
@@ -37,22 +47,27 @@ import android.widget.AdapterView.OnItemClickListener;
 import android.widget.BaseAdapter;
 import android.widget.ImageView;
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.oxplot.contactphotosync.StoreImageDialog.StoreImageParams;
 
 public class AssignContactPhotoActivity extends Activity {
 
   private static final int REQ_CODE_PICK_IMAGE = 88;
 
+  private static final String DISK_CACHE_DIR = "thumbcache";
   private static final String ACCOUNT_TYPE = "com.google";
   private static final int THUMB_SIZE = 80;
 
+  private Drawable unchangedThumb;
   private String account;
   private ListView contactList;
   private TextView emptyList;
+  private ProgressBar loadingProgress;
   private LoadContactCursorTask contactCursorLoader;
-  private Set<Integer> thumbQueried;
-  private SparseArray<Drawable> thumbCache;
+  private SparseArray<Drawable> thumbMemCache;
   private Set<AsyncTask<?, ?, ?>> asyncTasks;
   private Drawable defaultThumb;
   private int pickedRawContact;
@@ -61,11 +76,20 @@ public class AssignContactPhotoActivity extends Activity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+
+    // Initialize cache directory
+
+    new File(getCacheDir(), DISK_CACHE_DIR).mkdir();
+
+    unchangedThumb = new BitmapDrawable(getResources(), Bitmap.createBitmap(1,
+        1, Config.ALPHA_8));
+
     setContentView(R.layout.activity_assign_contact_photo);
     contactList = (ListView) findViewById(R.id.contactList);
     emptyList = (TextView) findViewById(R.id.empty);
+    loadingProgress = (ProgressBar) findViewById(R.id.loading);
 
-    contactList.setEmptyView(emptyList);
+    contactList.setEmptyView(loadingProgress);
     contactList.setAdapter(new ContactAdapter());
     contactList.setDividerHeight(1);
 
@@ -73,8 +97,7 @@ public class AssignContactPhotoActivity extends Activity {
     account = getIntent().getStringExtra("account");
     setTitle(account);
 
-    thumbCache = new SparseArray<Drawable>();
-    thumbQueried = new HashSet<Integer>();
+    thumbMemCache = new SparseArray<Drawable>();
     asyncTasks = new HashSet<AsyncTask<?, ?, ?>>();
     defaultThumb = getResources().getDrawable(R.drawable.new_picture);
 
@@ -86,6 +109,8 @@ public class AssignContactPhotoActivity extends Activity {
         int status = storeImageDialog.getResult();
         switch (status) {
         case StoreImageDialog.RESULT_SUCCESS:
+          removeDiskCache(pickedRawContact);
+          thumbMemCache.remove(pickedRawContact);
           Toast.makeText(AssignContactPhotoActivity.this, "Voila!",
               Toast.LENGTH_LONG).show();
           break;
@@ -109,7 +134,7 @@ public class AssignContactPhotoActivity extends Activity {
       @Override
       public void onItemClick(AdapterView<?> arg0, View view, int position,
           long id) {
-        pickedRawContact = (Integer) contactList.getItemAtPosition(position);
+        pickedRawContact = ((Contact) contactList.getItemAtPosition(position)).rawContactId;
         Intent intent = new Intent();
         intent.setType("image/*");
         intent.setAction(Intent.ACTION_GET_CONTENT);
@@ -119,6 +144,42 @@ public class AssignContactPhotoActivity extends Activity {
       }
     });
 
+  }
+
+  private void removeDiskCache(int id) {
+    new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id).delete();
+  }
+
+  private void writeDiskCache(int id, Bitmap bitmap) {
+    File file = new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id);
+    FileOutputStream stream = null;
+    try {
+      stream = new FileOutputStream(file);
+      bitmap.compress(CompressFormat.JPEG, 90, stream);
+    } catch (IOException e) {
+      e.printStackTrace();
+    } finally {
+      if (stream != null)
+        try {
+          stream.close();
+        } catch (IOException e) {}
+    }
+  }
+
+  private Bitmap readDiskCache(int id) {
+    File file = new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id);
+    FileInputStream stream = null;
+    Bitmap result = null;
+    try {
+      stream = new FileInputStream(file);
+      result = BitmapFactory.decodeStream(stream);
+    } catch (IOException e) {} finally {
+      if (stream != null)
+        try {
+          stream.close();
+        } catch (IOException e) {}
+    }
+    return result;
   }
 
   protected void onActivityResult(int requestCode, int resultCode,
@@ -133,15 +194,27 @@ public class AssignContactPhotoActivity extends Activity {
         Cursor cursor = getContentResolver().query(selectedImage,
             new String[] { Media.MIME_TYPE, Media.ORIENTATION }, null, null,
             null);
-        cursor.moveToFirst();
 
-        String mimeType = cursor.getString(cursor
-            .getColumnIndex(Media.MIME_TYPE));
-        int orientation = cursor.getInt(cursor
-            .getColumnIndex(Media.ORIENTATION));
-        cursor.close();
+        if (cursor == null) {
+          Toast.makeText(this, "Woops something went wrong", Toast.LENGTH_LONG)
+              .show();
+          return;
+        }
 
-        if (!mimeType.startsWith("image/")) {
+        StoreImageParams params = new StoreImageParams();
+
+        try {
+          cursor.moveToFirst();
+
+          params.mimeType = cursor.getString(cursor
+              .getColumnIndex(Media.MIME_TYPE));
+          params.orientation = cursor.getInt(cursor
+              .getColumnIndex(Media.ORIENTATION));
+        } finally {
+          cursor.close();
+        }
+
+        if (!params.mimeType.startsWith("image/")) {
           // XXX this is almost invisible in Holo theme (Holo.Light is fine)
           Toast.makeText(this, "Only image files can be used. Pick again.",
               Toast.LENGTH_LONG).show();
@@ -150,10 +223,8 @@ public class AssignContactPhotoActivity extends Activity {
 
         // Run a background job to load+crop+save the image
 
-        StoreImageDialog.StoreImageParams params = new StoreImageDialog.StoreImageParams();
         params.rawContactId = pickedRawContact;
         params.uri = selectedImage;
-        params.orien = orientation;
         params.account = account;
         storeImageDialog.start(params);
 
@@ -185,7 +256,6 @@ public class AssignContactPhotoActivity extends Activity {
 
   @Override
   protected void onPause() {
-    // storeImageDialog.cancel();
     if (contactCursorLoader != null)
       contactCursorLoader.cancel(false);
     for (AsyncTask<?, ?, ?> lt : asyncTasks)
@@ -200,7 +270,6 @@ public class AssignContactPhotoActivity extends Activity {
   }
 
   private void refresh() {
-    thumbQueried.clear();
     if (contactCursorLoader != null)
       contactCursorLoader.cancel(false);
     contactCursorLoader = new LoadContactCursorTask();
@@ -213,15 +282,16 @@ public class AssignContactPhotoActivity extends Activity {
 
     @Override
     protected Drawable doInBackground(Integer... params) {
+      AssetFileDescriptor fd = null;
+      InputStream is = null;
+      BitmapFactory.Options opts;
+
       rawContactId = params[0];
       BitmapDrawable result = null;
       Uri rawContactPhotoUri = Uri.withAppendedPath(
           ContentUris.withAppendedId(RawContacts.CONTENT_URI, rawContactId),
           RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
       try {
-        AssetFileDescriptor fd;
-        InputStream is;
-        BitmapFactory.Options opts;
 
         // Get the bounds for later resampling
 
@@ -241,18 +311,27 @@ public class AssignContactPhotoActivity extends Activity {
             "r");
         is = fd.createInputStream();
 
-        result = new BitmapDrawable(getResources(), BitmapFactory.decodeStream(
-            is, null, opts));
+        Bitmap bitmap = BitmapFactory.decodeStream(is, null, opts);
+        if (bitmap == null)
+          return unchangedThumb;
 
-        is.close();
-        fd.close();
+        result = new BitmapDrawable(getResources(), bitmap);
+
         return result;
 
       } catch (FileNotFoundException e) {
         return null;
       } catch (IOException e) {
-        e.printStackTrace();
         return null;
+      } finally {
+        if (is != null)
+          try {
+            is.close();
+          } catch (IOException e) {}
+        if (fd != null)
+          try {
+            fd.close();
+          } catch (IOException e) {}
       }
     }
 
@@ -261,38 +340,49 @@ public class AssignContactPhotoActivity extends Activity {
       super.onPostExecute(result);
       asyncTasks.remove(this);
       if (!isCancelled()) {
-        if (result != null) {
-          thumbCache.put(rawContactId, result);
+        if (result == null) {
+          thumbMemCache.put(rawContactId, defaultThumb);
+          removeDiskCache(rawContactId);
+        } else if (result != unchangedThumb) {
+          thumbMemCache.put(rawContactId, result);
+          writeDiskCache(rawContactId, ((BitmapDrawable) result).getBitmap());
+          // thumbMemCache.put(rawContactId, result);
           ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
-        } else {
-          thumbCache.remove(rawContactId);
         }
       }
     }
   }
 
-  private class LoadContactCursorTask extends AsyncTask<String, Void, Cursor> {
+  private class LoadContactCursorTask extends
+      AsyncTask<String, Void, List<Contact>> {
 
     @Override
-    protected Cursor doInBackground(String... params) {
+    protected List<Contact> doInBackground(String... params) {
       Uri groupsUri = ContactsContract.Groups.CONTENT_URI.buildUpon()
           .appendQueryParameter(RawContacts.ACCOUNT_NAME, params[0])
           .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+
       Cursor cursor = getContentResolver().query(groupsUri, null, null, null,
           null);
+      if (cursor == null)
+        return null;
+
       int myContactGroupId = -1;
-      for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
 
-        String sourceId = cursor.getString(cursor
-            .getColumnIndex(ContactsContract.Groups.SOURCE_ID));
-        if (sourceId.equals("6")) {
-          myContactGroupId = cursor.getInt(cursor
-              .getColumnIndex(ContactsContract.Groups._ID));
-          break;
+      try {
+        for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
+
+          String sourceId = cursor.getString(cursor
+              .getColumnIndex(ContactsContract.Groups.SOURCE_ID));
+          if (sourceId.equals("6")) {
+            myContactGroupId = cursor.getInt(cursor
+                .getColumnIndex(ContactsContract.Groups._ID));
+            break;
+          }
         }
+      } finally {
+        cursor.close();
       }
-
-      cursor.close();
 
       if (myContactGroupId >= 0) {
         Uri contactsUri = ContactsContract.Data.CONTENT_URI.buildUpon()
@@ -306,56 +396,68 @@ public class AssignContactPhotoActivity extends Activity {
             GroupMembership.GROUP_ROW_ID + " = " + myContactGroupId, null,
             GroupMembership.DISPLAY_NAME);
 
-        return cursor;
+        if (cursor == null)
+          return null;
+
+        ArrayList<Contact> contacts = new ArrayList<Contact>();
+        try {
+          if (!cursor.moveToFirst())
+            return null;
+          do {
+            Contact c = new Contact();
+            c.rawContactId = cursor.getInt(cursor
+                .getColumnIndex(GroupMembership.RAW_CONTACT_ID));
+            c.displayName = cursor.getString(cursor
+                .getColumnIndex(Data.DISPLAY_NAME));
+            contacts.add(c);
+          } while (cursor.moveToNext());
+        } finally {
+          cursor.close();
+        }
+
+        return contacts;
       } else {
         return null;
       }
     }
 
     @Override
-    protected void onPostExecute(Cursor result) {
+    protected void onPostExecute(List<Contact> result) {
       super.onPostExecute(result);
       if (!isCancelled() && result != null) {
         ContactAdapter adapter = (ContactAdapter) contactList.getAdapter();
-        if (adapter.getCursor() != null)
-          adapter.getCursor().close();
-        adapter.setCursor(result);
-
-      } else if (result != null) {
-        result.close();
+        adapter.refresh(result);
       }
+      // FIXME we don't have to do this every time!
+      loadingProgress.setVisibility(View.GONE);
+      contactList.setEmptyView(emptyList);
     }
 
   }
 
+  private static class Contact {
+    public int rawContactId;
+    public String displayName;
+  }
+
   private class ContactAdapter extends BaseAdapter {
 
-    private Cursor cursor;
+    private ArrayList<Contact> items = new ArrayList<Contact>();
 
-    public Cursor getCursor() {
-      return cursor;
-    }
-
-    public void setCursor(Cursor cursor) {
-      this.cursor = cursor;
+    public void refresh(List<Contact> newList) {
+      items.clear();
+      items.addAll(newList);
       notifyDataSetChanged();
     }
 
     @Override
     public int getCount() {
-      if (cursor != null)
-        return cursor.getCount();
-      return 0;
+      return items.size();
     }
 
     @Override
     public Object getItem(int position) {
-      if (cursor != null) {
-        cursor.moveToPosition(position);
-        return cursor.getInt(cursor
-            .getColumnIndex(GroupMembership.RAW_CONTACT_ID));
-      }
-      return null;
+      return items.get(position);
     }
 
     @Override
@@ -365,26 +467,30 @@ public class AssignContactPhotoActivity extends Activity {
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-      cursor.moveToPosition(position);
-      int rawContactId = cursor.getInt(cursor
-          .getColumnIndex(GroupMembership.RAW_CONTACT_ID));
+      Contact c = items.get(position);
 
-      if (!thumbQueried.contains(rawContactId)) {
+      Drawable thumb = thumbMemCache.get(c.rawContactId);
+      if (thumb == null) {
         asyncTasks.add((LoadThumbTask) new LoadThumbTask()
-            .execute(rawContactId));
-        thumbQueried.add(rawContactId);
+            .execute(c.rawContactId));
+        Bitmap fromDisk = readDiskCache(c.rawContactId);
+        if (fromDisk != null)
+          thumbMemCache.put(c.rawContactId, new BitmapDrawable(getResources(),
+              fromDisk));
+        else
+          thumbMemCache.put(c.rawContactId, defaultThumb);
       }
-      Drawable thumb = thumbCache.get(rawContactId);
+      thumb = thumbMemCache.get(c.rawContactId);
 
       View topView = convertView != null ? convertView : getLayoutInflater()
           .inflate(R.layout.contact_row, null);
 
-      ((TextView) topView.findViewById(R.id.name)).setText(cursor
-          .getString(cursor.getColumnIndex(Data.DISPLAY_NAME)));
+      ((TextView) topView.findViewById(R.id.name)).setText(c.displayName);
       ((ImageView) topView.findViewById(R.id.photo))
-          .setBackgroundDrawable(thumb == null ? defaultThumb : thumb);
+          .setBackgroundDrawable(thumb);
       return topView;
     }
+
   }
 
 }

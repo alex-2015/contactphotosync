@@ -7,15 +7,19 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
 
+import android.app.ActivityManager;
+import android.app.ActivityManager.RunningAppProcessInfo;
 import android.app.ProgressDialog;
 import android.content.ContentProviderOperation;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.OperationApplicationException;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -47,7 +51,8 @@ public class StoreImageDialog extends ProgressDialog {
   public static final int RESULT_IN_PROGRESS = 4;
 
   private static final String ACCOUNT_TYPE = "com.google";
-  private static final String photoDir = "/data/data/com.android.providers.contacts/files/photos";
+  private static final String PHOTO_DIR = "/files/photos";
+  private static final String CONTACT_PROVIDER = "com.android.providers.contacts";
 
   private static final int TILE_SIZE = 256;
   private static final int MAX_DIMEN = 1500;
@@ -156,9 +161,10 @@ public class StoreImageDialog extends ProgressDialog {
 
           // Rotate the final draw based on orientation of the JPEG
 
-          canvas.rotate(p.orien);
-          canvas.translate(p.orien == 180 || p.orien == 270 ? -minDimen : 0,
-              p.orien == 90 || p.orien == 180 ? -minDimen : 0);
+          canvas.rotate(p.orientation);
+          canvas.translate(
+              p.orientation == 180 || p.orientation == 270 ? -minDimen : 0,
+              p.orientation == 90 || p.orientation == 180 ? -minDimen : 0);
           canvas.scale(((float) finalDimen) / minDimen, ((float) finalDimen)
               / minDimen);
           Paint canvasPaint = new Paint();
@@ -303,16 +309,13 @@ public class StoreImageDialog extends ProgressDialog {
             fdout.close();
             fileAvailable = true;
             break;
-          } catch (FileNotFoundException e) {
-          } finally {
+          } catch (FileNotFoundException e) {} finally {
             try {
               is.close();
-            } catch (IOException e) {
-            }
+            } catch (IOException e) {}
             try {
               fdout.close();
-            } catch (IOException e) {
-            }
+            } catch (IOException e) {}
           }
 
           Thread.sleep(WAIT_TIME_INT);
@@ -323,7 +326,7 @@ public class StoreImageDialog extends ProgressDialog {
 
         // Atomically replace the image file
 
-        if (!rootReplaceImage(tmpPath, photoDir, fileId))
+        if (!rootReplaceImage(tmpPath, fileId))
           return RESULT_NO_ROOT;
 
         return RESULT_SUCCESS;
@@ -336,33 +339,11 @@ public class StoreImageDialog extends ProgressDialog {
         try {
           if (is != null)
             is.close();
-        } catch (IOException e) {
-        }
+        } catch (IOException e) {}
         try {
           if (os != null)
             os.close();
-        } catch (IOException e) {
-        }
-      }
-    }
-
-    private String fileToString(File path) throws IOException {
-      InputStreamReader stream = new InputStreamReader(
-          new FileInputStream(path), "UTF-8");
-      StringBuffer result = new StringBuffer();
-      char[] buffer = new char[4096];
-      try {
-        int charsRead = stream.read(buffer);
-        while (charsRead >= 0) {
-          result.append(buffer, 0, charsRead);
-          charsRead = stream.read(buffer);
-        }
-        return result.toString();
-      } finally {
-        try {
-          stream.close();
-        } catch (IOException e) {
-        }
+        } catch (IOException e) {}
       }
     }
 
@@ -397,39 +378,39 @@ public class StoreImageDialog extends ProgressDialog {
       }
     }
 
-    private boolean rootReplaceImage(String src, String dstDir, int fileId)
+    private boolean rootReplaceImage(String src, int fileId)
         throws InterruptedException, IOException {
 
-      File lsofdirPath = new File(getContext().getCacheDir() + "/lsofdir");
-      lsofdirPath.delete();
-
-      // Let's find out what the user/group of the android contact provider is
-
-      if (!runRoot("ls -l " + dstDir + "/.. > " + lsofdirPath + "\nchmod 666 "
-          + lsofdirPath + "\n"))
+      int uid;
+      String dstDir;
+      try {
+        PackageManager pm = getContext().getPackageManager();
+        PackageInfo pi = pm.getPackageInfo(CONTACT_PROVIDER, 0);
+        uid = pi.applicationInfo.uid;
+        dstDir = pi.applicationInfo.dataDir + PHOTO_DIR;
+      } catch (NameNotFoundException e) {
         return false;
+      }
 
-      if (!lsofdirPath.exists())
-        return false;
+      // Find the PID of contact provider
 
-      // Get the uid and gid of contact provider
-
-      String[] parts = fileToString(lsofdirPath).split("\n")[0].trim().split(
-          " +");
-      int pno;
-      for (pno = 1; pno < parts.length - 1; pno++)
-        if (parts[pno].equals(parts[pno + 1]))
-          break;
-      String uid = parts[pno], gid = parts[pno + 1];
+      String killCommand = "";
+      ActivityManager am = (ActivityManager) getContext().getSystemService(
+          Context.ACTIVITY_SERVICE);
+      for (RunningAppProcessInfo proc : am.getRunningAppProcesses())
+        for (String p : proc.pkgList)
+          if ("com.android.providers.contacts".equals(p)) {
+            killCommand = "kill " + proc.pid + "\n";
+            break;
+          }
 
       // Modify the permission of our tmp file and move it over to the correct
-      // location + restart com.android.contacts
+      // location + restart contact storage service
 
-      if (!runRoot("chown " + uid + ":" + gid + " " + src + "\nchmod 600 "
-          + src + "\nmv " + src + " " + dstDir + "/" + fileId))
+      if (!runRoot("chown " + uid + ":" + uid + " " + src + "\nchmod 600 "
+          + src + "\nmv " + src + " " + dstDir + "/" + fileId + "\n"
+          + killCommand))
         return false;
-
-      // Unfortunately on some phones
 
       return true;
 
@@ -451,7 +432,8 @@ public class StoreImageDialog extends ProgressDialog {
   public static class StoreImageParams {
     public int rawContactId;
     public Uri uri;
-    public int orien;
+    public int orientation;
     public String account;
+    public String mimeType;
   }
 }
