@@ -30,5 +30,7 @@
     <string name="selected">selected</string>
     <string name="contact">contact</string>
     <string name="contacts">contacts</string>
+    <string name="removing_photos">Removing photos</string>
+    <string name="removed_photos">%0$s photos removed</string>
 
 </resources>

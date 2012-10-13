@@ -5,8 +5,7 @@
         android:icon="@drawable/remove"
         android:orderInCategory="100"
         android:showAsAction="always"
-        android:title="@string/menu_remove_photo"
-        android:visible="false"/>
+        android:title="@string/menu_remove_photo"/>
     <item
         android:id="@+id/menu_download_photo"
         android:icon="@drawable/download"

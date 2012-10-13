@@ -36,6 +36,7 @@ import java.util.Set;
 import android.accounts.Account;
 import android.app.Activity;
 import android.app.ProgressDialog;
+import android.content.ContentProviderOperation;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -43,6 +44,7 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
+import android.content.OperationApplicationException;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -56,8 +58,10 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.RemoteException;
 import android.provider.ContactsContract;
 import android.provider.ContactsContract.CommonDataKinds.GroupMembership;
+import android.provider.ContactsContract.CommonDataKinds.Photo;
 import android.provider.ContactsContract.Data;
 import android.provider.ContactsContract.RawContacts;
 import android.provider.MediaStore.Images.Media;
@@ -96,7 +100,6 @@ public class AssignContactPhotoActivity extends Activity {
   private TextView emptyList;
   private ProgressBar loadingProgress;
   private LoadContactsTask contactsLoader;
-  private DownloadUploadTask downloadUploadTask;
   private SparseArray<Drawable> thumbMemCache;
   private Set<AsyncTask<?, ?, ?>> asyncTasks;
   private Drawable defaultThumb;
@@ -303,18 +306,15 @@ public class AssignContactPhotoActivity extends Activity {
       break;
     case R.id.menu_download_all:
     case R.id.menu_upload_all:
-      if (downloadUploadTask != null)
-        downloadUploadTask.cancel(true);
-      downloadUploadTask = new DownloadUploadTask(
+      new DownloadUploadTask(
           item.getItemId() == R.id.menu_download_all ? DownloadUploadTask.TYPE_DOWNLOAD
-              : DownloadUploadTask.TYPE_UPLOAD);
-      downloadUploadTask.execute(((ContactAdapter) contactList.getAdapter())
-          .getBackingList());
+              : DownloadUploadTask.TYPE_UPLOAD)
+          .execute(((ContactAdapter) contactList.getAdapter()).getBackingList());
 
       break;
     case R.id.menu_refresh:
-      thumbMemCache.clear();
-      refresh();
+      onPause();
+      onResume();
       break;
     }
     return super.onOptionsItemSelected(item);
@@ -327,18 +327,13 @@ public class AssignContactPhotoActivity extends Activity {
       contactsLoader.cancel(false);
     for (AsyncTask<?, ?, ?> lt : asyncTasks)
       lt.cancel(false);
+    asyncTasks.clear();
     super.onPause();
   }
 
   @Override
   protected void onResume() {
     super.onResume();
-    refresh();
-  }
-
-  private void refresh() {
-    if (contactsLoader != null)
-      contactsLoader.cancel(false);
     contactsLoader = new LoadContactsTask();
     contactsLoader.execute(account);
   }
@@ -637,41 +632,111 @@ public class AssignContactPhotoActivity extends Activity {
     }
   }
 
+  private class RemovePhotoTask extends AsyncTask<List<Contact>, Void, Integer> {
+
+    private static final int BATCH_SIZE = 50;
+    private ProgressDialog dialog;
+    private List<Contact> contacts;
+
+    public RemovePhotoTask() {
+      super();
+      dialog = new ProgressDialog(AssignContactPhotoActivity.this);
+      dialog.setTitle(getResources().getString(R.string.removing_photos));
+
+      dialog.setIndeterminate(true);
+      dialog.setCancelable(true);
+      dialog.setOnCancelListener(new OnCancelListener() {
+        @Override
+        public void onCancel(DialogInterface dialog) {
+          cancel(true);
+        }
+      });
+      dialog.show();
+    }
+
+    @Override
+    protected Integer doInBackground(List<Contact>... arg0) {
+      contacts = arg0[0];
+
+      for (int i = 0; i < contacts.size(); i += BATCH_SIZE) {
+        StringBuffer inVals = new StringBuffer();
+        int maxIndex = Math.min(BATCH_SIZE + i, contacts.size()) - i;
+        for (int j = 0; j < maxIndex; j++)
+          inVals.append(contacts.get(i + j).rawContactId + ",");
+        inVals.deleteCharAt(inVals.length() - 1);
+        String selectionClause = GroupMembership.RAW_CONTACT_ID + " IN ("
+            + inVals + ")";
+
+        ArrayList<ContentProviderOperation> ops = new ArrayList<ContentProviderOperation>();
+
+        ops.add(ContentProviderOperation
+            .newUpdate(
+                Data.CONTENT_URI
+                    .buildUpon()
+                    .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+                    .appendQueryParameter(RawContacts.ACCOUNT_TYPE,
+                        ACCOUNT_TYPE).build())
+            .withSelection(selectionClause, null).withValue(Photo.PHOTO, null)
+            .build());
+
+        try {
+          getContentResolver().applyBatch(ContactsContract.AUTHORITY, ops);
+        } catch (RemoteException e) {} catch (OperationApplicationException e) {}
+
+        if (isCancelled())
+          return 0;
+      }
+
+      return contacts.size();
+    }
+
+    @Override
+    protected void onCancelled() {
+      dialog.dismiss();
+    }
+
+    @Override
+    protected void onPostExecute(Integer result) {
+      dialog.dismiss();
+      Toast.makeText(
+          AssignContactPhotoActivity.this,
+          String.format(getResources().getString(R.string.removed_photos),
+              result), Toast.LENGTH_LONG).show();
+      for (Contact c : contacts)
+        thumbMemCache.remove(c.rawContactId);
+      ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
+    }
+  }
+
   private class ContactListMultiChoiceModeListener implements
       MultiChoiceModeListener {
 
     private HashSet<Integer> selectedPos;
 
-    @SuppressWarnings("unchecked")
-    private void uploadDownloadPhoto(int dir) {
+    private List<Contact> getSelectedContacts() {
       ArrayList<Contact> selectedContacts = new ArrayList<Contact>();
       List<Contact> allContacts = ((ContactAdapter) contactList.getAdapter())
           .getBackingList();
       for (int p : selectedPos)
         selectedContacts.add(allContacts.get(p));
-
-      if (downloadUploadTask != null)
-        downloadUploadTask.cancel(true);
-      downloadUploadTask = new DownloadUploadTask(dir);
-      downloadUploadTask.execute(selectedContacts);
+      return selectedContacts;
     }
 
-    private void removePhoto() {
-      // TODO not sure if we really need this one
-    }
-
+    @SuppressWarnings("unchecked")
     @Override
     public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
       switch (item.getItemId()) {
 
       case R.id.menu_upload_photo:
       case R.id.menu_download_photo:
-        uploadDownloadPhoto(item.getItemId() == R.id.menu_download_photo ? DownloadUploadTask.TYPE_DOWNLOAD
-            : DownloadUploadTask.TYPE_UPLOAD);
+        new DownloadUploadTask(
+            item.getItemId() == R.id.menu_download_photo ? DownloadUploadTask.TYPE_DOWNLOAD
+                : DownloadUploadTask.TYPE_UPLOAD)
+            .execute(getSelectedContacts());
         break;
 
       case R.id.menu_remove_photo:
-        removePhoto();
+        new RemovePhotoTask().execute(getSelectedContacts());
         break;
 
       }

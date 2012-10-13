@@ -21,6 +21,9 @@
 
 package com.oxplot.contactphotosync;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -28,6 +31,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -92,6 +96,35 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       sb.append(digits.charAt(bi & 0xf));
     }
     return sb.toString();
+  }
+
+  private byte[] toMD5(InputStream stream) throws IOException {
+
+    MessageDigest md5 = null;
+    try {
+      md5 = MessageDigest.getInstance("MD5");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IOException(e);
+    }
+
+    byte[] buffer = new byte[4096];
+    int bytesRead = stream.read(buffer);
+
+    while (bytesRead >= 0) {
+      md5.update(buffer, 0, bytesRead);
+      bytesRead = stream.read(buffer);
+    }
+
+    return md5.digest();
+
+  }
+
+  private byte[] toMD5(String string) throws IOException {
+    try {
+      return toMD5(new ByteArrayInputStream(string.getBytes("UTF-8")));
+    } catch (UnsupportedEncodingException e) {
+      throw new IOException(e);
+    }
   }
 
   private static class Contact {
@@ -243,12 +276,72 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     }
   }
 
-  private Hashtable<String, PicasaPhoto> retrieveServerEntries(
+  private Hashtable<String, PicasaPhoto> retrieveServerEntriesFromCache(
+      PicasaAlbum album, File path) throws IOException {
+    DataInputStream is = null;
+    Hashtable<String, PicasaPhoto> entries = new Hashtable<String, PicasaPhoto>();
+    try {
+      is = new DataInputStream(new FileInputStream(path));
+      while (true) {
+        PicasaPhoto p = album.deserializePhoto(is);
+        if (p == null)
+          break;
+        entries.put(p.title, p);
+      }
+    } finally {
+      if (is != null)
+        try {
+          is.close();
+        } catch (IOException e) {}
+    }
+    return entries;
+  }
+
+  private void storeServerEntriesToCache(Collection<PicasaPhoto> photos,
+      File path) throws IOException {
+    File tmpPath = null;
+    DataOutputStream os = null;
+    try {
+      tmpPath = File.createTempFile("storeentriestmp-", "", getContext()
+          .getCacheDir());
+      os = new DataOutputStream(new FileOutputStream(tmpPath));
+      for (PicasaPhoto p : photos)
+        p.serialize(os);
+      os.close();
+      tmpPath.renameTo(path);
+    } finally {
+      if (os != null)
+        try {
+          os.close();
+        } catch (IOException e) {}
+      if (tmpPath != null)
+        tmpPath.delete();
+    }
+  }
+
+  private Hashtable<String, PicasaPhoto> retrieveServerEntries(String account,
       PicasawebService pws, PicasaAlbum album) throws IOException,
       PicasaAuthException {
-    Hashtable<String, PicasaPhoto> serverEntries = new Hashtable<String, PicasaPhoto>();
-    for (PicasaPhoto p : album.listPhotos())
-      serverEntries.put(p.title, p);
+    Hashtable<String, PicasaPhoto> serverEntries;
+
+    String accNameHash = toHex(toMD5(account));
+    String tsHash = toHex(toMD5(album.getUpdated()));
+    String baseName = "serverentries-" + accNameHash + "-";
+    File cachePath = new File(getContext().getCacheDir(), baseName + tsHash);
+
+    if (cachePath.exists()) {
+      serverEntries = retrieveServerEntriesFromCache(album, cachePath);
+    } else {
+
+      for (File f : getContext().getCacheDir().listFiles())
+        if (f.getName().startsWith(baseName))
+          f.delete();
+
+      serverEntries = new Hashtable<String, PicasaPhoto>();
+      for (PicasaPhoto p : album.listPhotos())
+        serverEntries.put(p.title, p);
+      storeServerEntriesToCache(serverEntries.values(), cachePath);
+    }
     return serverEntries;
   }
 
@@ -341,8 +434,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     pws.authToken = authToken;
 
     PicasaAlbum album = ensureAlbumExists(pws);
-    Hashtable<String, PicasaPhoto> serverEntries = retrieveServerEntries(pws,
-        album);
+    Hashtable<String, PicasaPhoto> serverEntries = retrieveServerEntries(
+        account.name, pws, album);
 
     Collection<Contact> localContacts = getLocalContacts(account.name);
     if (localContacts == null)

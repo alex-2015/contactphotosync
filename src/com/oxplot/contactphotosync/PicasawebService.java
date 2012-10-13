@@ -24,6 +24,9 @@ package com.oxplot.contactphotosync;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,7 +58,7 @@ public class PicasawebService {
   private String photoXML;
   private String photoUpdateXML;
 
-  private String encodeXML(String text) {
+  private static String encodeXML(String text) {
     Matcher m = Pattern.compile("[&\"'<>]").matcher(text);
     if (!m.find())
       return text;
@@ -88,7 +91,7 @@ public class PicasawebService {
     return buffer.toString();
   }
 
-  private String decodeXML(String text) {
+  private static String decodeXML(String text) {
     Matcher m = Pattern.compile("&(amp|quot|apos|lt|gt);").matcher(text);
     if (!m.find())
       return text;
@@ -114,7 +117,7 @@ public class PicasawebService {
     return buffer.toString();
   }
 
-  private String extractRegex(String data, String pattern) {
+  private static String extractRegex(String data, String pattern) {
     Matcher m = Pattern.compile(pattern, Pattern.DOTALL).matcher(data);
     return m.find() ? m.group(1) : "";
   }
@@ -148,7 +151,8 @@ public class PicasawebService {
 
   public PicasaAlbum getAlbum(String id) throws IOException,
       PicasaAuthException {
-    String url = "https://picasaweb.google.com/data/entry/api/user/default/albumid/";
+    String url = "https://picasaweb.google.com/data/entry/api/user/default/albumid"
+        + "?fields=entry(gphoto:id,title,summary,gphoto:access,updated,link[@rel='edit'])";
     ByteArrayOutputStream baOut = new ByteArrayOutputStream();
     int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -168,7 +172,8 @@ public class PicasawebService {
 
   public Collection<PicasaAlbum> listAlbums() throws IOException,
       PicasaAuthException {
-    String url = "https://picasaweb.google.com/data/feed/api/user/default?max-results=1000000";
+    String url = "https://picasaweb.google.com/data/feed/api/user/default?max-results=1000000"
+        + "&fields=entry(gphoto:id,title,summary,gphoto:access,updated,link[@rel='edit'])";
     ByteArrayOutputStream baOut = new ByteArrayOutputStream();
     int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -244,6 +249,7 @@ public class PicasawebService {
   }
 
   public class PicasaAlbum {
+
     private String id;
     private String editUrl;
     private String updated;
@@ -307,6 +313,22 @@ public class PicasawebService {
       return new PicasaAlbum(baOut.toString("UTF-8"));
     }
 
+    public PicasaPhoto deserializePhoto(DataInputStream is) throws IOException {
+      PicasaPhoto p = new PicasaPhoto(this);
+      try {
+        p.id = is.readUTF();
+        p.uniqueId = is.readUTF();
+        p.title = is.readUTF();
+        p.summary = is.readUTF();
+        p.photoUrl = is.readUTF();
+        p.editUrl = is.readUTF();
+        p.editMediaUrl = is.readUTF();
+      } catch (EOFException e) {
+        return null;
+      }
+      return p;
+    }
+
     public PicasaPhoto createPhoto() {
       return new PicasaPhoto(this);
     }
@@ -314,7 +336,11 @@ public class PicasawebService {
     public PicasaPhoto getPhoto(String id) throws IOException,
         PicasaAuthException {
       String url = "https://picasaweb.google.com/data/entry/api/user/default/albumid/"
-          + this.id + "/photoid/" + id + "?imgmax=1600";
+          + this.id
+          + "/photoid/"
+          + id
+          + "?imgmax=1600"
+          + "&fields=entry(title,summary,gphoto:id,content,link[@rel='edit'],link[@rel='edit-media'],exif:tags(exif:imageUniqueID))";
       ByteArrayOutputStream baOut = new ByteArrayOutputStream();
       int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -335,7 +361,9 @@ public class PicasawebService {
     public Collection<PicasaPhoto> listPhotos() throws IOException,
         PicasaAuthException {
       String url = "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
-          + id + "?imgmax=1600&max-results=1000000";
+          + id
+          + "?imgmax=1600&max-results=1000000"
+          + "&fields=entry(title,summary,gphoto:id,content,link[@rel='edit'],link[@rel='edit-media'],exif:tags(exif:imageUniqueID))";
       ByteArrayOutputStream baOut = new ByteArrayOutputStream();
       int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -478,6 +506,17 @@ public class PicasawebService {
     public boolean delete() throws IOException, PicasaAuthException {
       return performPWCmd("DELETE", editUrl, null, null, null) == HttpURLConnection.HTTP_OK;
     }
+
+    public void serialize(DataOutputStream os) throws IOException {
+      os.writeUTF(id);
+      os.writeUTF(uniqueId);
+      os.writeUTF(title);
+      os.writeUTF(summary);
+      os.writeUTF(photoUrl);
+      os.writeUTF(editUrl);
+      os.writeUTF(editMediaUrl);
+    }
+
   }
 
   @SuppressWarnings("serial")
