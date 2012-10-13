@@ -21,50 +21,172 @@
 
 package com.oxplot.contactphotosync;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.MalformedURLException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Hashtable;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.accounts.AuthenticatorException;
 import android.accounts.OperationCanceledException;
+import android.app.ActivityManager;
+import android.app.ActivityManager.RunningAppProcessInfo;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
+import android.content.ContentProviderOperation;
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.OperationApplicationException;
 import android.content.SyncResult;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.RemoteException;
+import android.provider.ContactsContract;
+import android.provider.ContactsContract.CommonDataKinds.GroupMembership;
+import android.provider.ContactsContract.CommonDataKinds.Photo;
+import android.provider.ContactsContract.Data;
 import android.provider.ContactsContract.RawContacts;
+import android.util.Log;
 
-import com.google.gdata.client.photos.PicasawebService;
-import com.google.gdata.data.PlainTextConstruct;
-import com.google.gdata.data.media.MediaStreamSource;
-import com.google.gdata.data.photos.AlbumEntry;
-import com.google.gdata.data.photos.AlbumFeed;
-import com.google.gdata.data.photos.GphotoEntry;
-import com.google.gdata.data.photos.PhotoEntry;
-import com.google.gdata.data.photos.UserFeed;
-import com.google.gdata.util.ServiceException;
+import com.oxplot.contactphotosync.PicasawebService.PicasaAlbum;
+import com.oxplot.contactphotosync.PicasawebService.PicasaAuthException;
+import com.oxplot.contactphotosync.PicasawebService.PicasaPhoto;
 
 public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
+  private static final String MY_CONTACTS_GROUP = "6";
+  private static final String PHOTO_DIR = "/files/photos";
+  private static final String CONTACT_PROVIDER = "com.android.providers.contacts";
+  private static final String TAG = "SyncAdapter";
   private static final String ACCOUNT_TYPE = "com.google";
-  private static final int SAVE_WAIT_MAX = 2000;
-  private static final int SAVE_WAIT_INT = 100;
+  private static final int WAIT_TIME_DB = 5000;
+  private static final int WAIT_TIME_INT = 50;
 
   public SyncAdapter(Context context, boolean autoInitialize) {
     super(context, autoInitialize);
+  }
 
+  private static String toHex(byte[] arr) {
+    String digits = "0123456789abcdef";
+    StringBuilder sb = new StringBuilder(arr.length * 2);
+    for (byte b : arr) {
+      int bi = b & 0xff;
+      sb.append(digits.charAt(bi >> 4));
+      sb.append(digits.charAt(bi & 0xf));
+    }
+    return sb.toString();
+  }
+
+  private static class Contact {
+    public int rawContactId;
+    public String displayName;
+    public String localHash;
+    public String remoteHash;
+    public String sourceId;
+  }
+
+  private boolean populateContactEntry(String account, Contact contact) {
+    Uri contactsUri = RawContacts.CONTENT_URI.buildUpon()
+        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+    Cursor cursor = getContext().getContentResolver().query(
+        contactsUri,
+        new String[] { RawContacts.SOURCE_ID, RawContacts.SYNC4,
+            RawContacts.DISPLAY_NAME_PRIMARY },
+        RawContacts._ID + " = " + contact.rawContactId, null, null);
+    if (cursor == null)
+      return false;
+    try {
+      if (!cursor.moveToFirst())
+        return false;
+      contact.sourceId = cursor.getString(cursor
+          .getColumnIndex(RawContacts.SOURCE_ID));
+      contact.displayName = cursor.getString(cursor
+          .getColumnIndex(RawContacts.DISPLAY_NAME_PRIMARY));
+      String sync4 = cursor.getString(cursor.getColumnIndex(RawContacts.SYNC4));
+      sync4 = sync4 == null ? "" : sync4;
+      String[] sync4Parts = (sync4 + "|").split("[|]", -1);
+      contact.remoteHash = sync4Parts[0];
+      contact.localHash = sync4Parts[1];
+      return true;
+    } finally {
+      cursor.close();
+    }
+  }
+
+  private Collection<Contact> getLocalContacts(String account) {
+
+    Uri groupsUri = ContactsContract.Groups.CONTENT_URI.buildUpon()
+        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+    Cursor cursor = getContext().getContentResolver().query(groupsUri, null,
+        null, null, null);
+    if (cursor == null)
+      return null;
+
+    int myContactGroupId = -1;
+
+    try {
+      for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
+
+        String sourceId = cursor.getString(cursor
+            .getColumnIndex(ContactsContract.Groups.SOURCE_ID));
+        if (MY_CONTACTS_GROUP.equals(sourceId)) {
+          myContactGroupId = cursor.getInt(cursor
+              .getColumnIndex(ContactsContract.Groups._ID));
+          break;
+        }
+      }
+    } finally {
+      cursor.close();
+    }
+
+    if (myContactGroupId < 0)
+      return null;
+
+    Uri contactsUri = ContactsContract.Data.CONTENT_URI.buildUpon()
+        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+    cursor = getContext().getContentResolver().query(contactsUri,
+        new String[] { GroupMembership.RAW_CONTACT_ID },
+        GroupMembership.GROUP_ROW_ID + " = " + myContactGroupId, null, null);
+
+    if (cursor == null)
+      return null;
+
+    ArrayList<Contact> contacts = new ArrayList<Contact>();
+    try {
+      if (!cursor.moveToFirst())
+        return contacts;
+      do {
+        Contact c = new Contact();
+        c.rawContactId = cursor.getInt(cursor
+            .getColumnIndex(GroupMembership.RAW_CONTACT_ID));
+        if (!populateContactEntry(account, c))
+          return null;
+        contacts.add(c);
+      } while (cursor.moveToNext());
+    } finally {
+      cursor.close();
+    }
+
+    return contacts;
   }
 
   @Override
@@ -79,464 +201,448 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
     try {
       authToken = manager.blockingGetAuthToken(account,
-          PicasawebService.PWA_SERVICE, true);
+          PicasawebService.PW_SERVICE_NAME, true);
       manager.invalidateAuthToken(ACCOUNT_TYPE, authToken);
       authToken = manager.blockingGetAuthToken(account,
-          PicasawebService.PWA_SERVICE, true);
+          PicasawebService.PW_SERVICE_NAME, true);
     } catch (OperationCanceledException e) {
-      e.printStackTrace();
       syncResult.stats.numAuthExceptions++;
       return;
     } catch (AuthenticatorException e) {
-      e.printStackTrace();
       syncResult.stats.numAuthExceptions++;
       return;
     } catch (IOException e) {
-      e.printStackTrace();
       syncResult.stats.numIoExceptions++;
       return;
     }
 
-    // Setup Picasa service access object
-
-    PicasawebService picasaService = new PicasawebService(getContext()
-        .getResources().getString(R.string.provider_name));
-    picasaService.setUserToken(authToken);
-
-    AlbumEntry photosAlbum = null;
-    Hashtable<String, PhotoEntry> serverEntries = null;
+    File tempPhotoPath = null;
 
     try {
-
-      // Ensure an appropriately named album exists for the photos
-
-      photosAlbum = ensureAlbumExists(picasaService);
-
-      // Get the list of all existing photos in the album
-
-      serverEntries = retrieveServerEntries(picasaService, photosAlbum);
-
+      tempPhotoPath = File.createTempFile("syncltr", "", getContext()
+          .getCacheDir());
+      performSyncAuthWrapped(account, authority, syncResult, authToken,
+          tempPhotoPath.getAbsolutePath());
+    } catch (PicasaAuthException e) {
+      syncResult.stats.numAuthExceptions++;
+      return;
     } catch (IOException e) {
-      e.printStackTrace();
       syncResult.stats.numIoExceptions++;
       return;
-    } catch (ServiceException e) {
-      e.printStackTrace();
-      syncResult.stats.numIoExceptions++;
-      return;
+    } catch (InterruptedException e) {
+      Log.w(TAG, "Sync was interrupted by killing the thread");
+    } finally {
+      if (tempPhotoPath != null)
+        tempPhotoPath.delete();
+    }
+  }
+
+  private Hashtable<String, PicasaPhoto> retrieveServerEntries(
+      PicasawebService pws, PicasaAlbum album) throws IOException,
+      PicasaAuthException {
+    Hashtable<String, PicasaPhoto> serverEntries = new Hashtable<String, PicasaPhoto>();
+    for (PicasaPhoto p : album.listPhotos())
+      serverEntries.put(p.title, p);
+    return serverEntries;
+  }
+
+  private PicasaAlbum ensureAlbumExists(PicasawebService pws)
+      throws IOException, PicasaAuthException {
+
+    String albumName = getContext().getResources().getString(
+        R.string.picasa_album_title);
+    String albumSummary = getContext().getResources().getString(
+        R.string.picasa_album_summary);
+
+    for (PicasaAlbum a : pws.listAlbums())
+      if (albumName.equals(a.title))
+        return a;
+
+    PicasaAlbum newAlbum = pws.createAlbum();
+    newAlbum.access = "protected";
+    newAlbum.title = albumName;
+    newAlbum.summary = albumSummary;
+
+    return newAlbum.save();
+  }
+
+  private String makeCopyInCache(int rawContactId, String tempPhotoPath)
+      throws IOException {
+    MessageDigest md5 = null;
+    try {
+      md5 = MessageDigest.getInstance("MD5");
+    } catch (NoSuchAlgorithmException e) {}
+
+    Uri rawContactPhotoUri = Uri.withAppendedPath(
+        ContentUris.withAppendedId(RawContacts.CONTENT_URI, rawContactId),
+        RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
+
+    AssetFileDescriptor fd;
+    try {
+      fd = getContext().getContentResolver().openAssetFileDescriptor(
+          rawContactPhotoUri, "r");
+    } catch (FileNotFoundException e) {
+      return null;
     }
 
-    Uri rawContactUri = RawContacts.CONTENT_URI.buildUpon()
-        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account.name)
-        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, account.type).build();
+    InputStream is = null;
+    OutputStream os = null;
+    try {
+      is = fd.createInputStream();
+      os = new FileOutputStream(tempPhotoPath);
 
-    Cursor cursor = getContext().getContentResolver().query(rawContactUri,
-        null, null, null, null);
-
-    for (cursor.moveToFirst(); !cursor.isAfterLast(); cursor.moveToNext()) {
-
-      syncResult.stats.numEntries++;
-
-      // Skip the yet to be synced contacts (ie those with no SOURCE_ID).
-
-      String sourceId = cursor.getString(cursor
-          .getColumnIndex(RawContacts.SOURCE_ID));
-      if (sourceId == null) {
-        syncResult.stats.numSkippedEntries++;
-        continue;
+      byte[] buffer = new byte[4096];
+      int bytesRead = is.read(buffer);
+      while (bytesRead >= 0) {
+        md5.update(buffer, 0, bytesRead);
+        os.write(buffer, 0, bytesRead);
+        bytesRead = is.read(buffer);
       }
 
-      String name = cursor.getString(cursor
-          .getColumnIndex((RawContacts.DISPLAY_NAME_PRIMARY)));
-      long id = cursor.getLong(cursor.getColumnIndex(RawContacts._ID));
-      String sync = cursor
-          .getString(cursor.getColumnIndex((RawContacts.SYNC4)));
-      sync = sync == null ? ":" : sync;
-      String metaEtag = sync.substring(0, sync.indexOf(':'));
-      String metaHash = sync.substring(sync.indexOf(':') + 1);
-      metaHash = "".equals(metaHash) ? toHex(getMD5DigestForNull()) : metaHash;
-      boolean localPhotoExists = true;
+    } finally {
+      if (is != null)
+        try {
+          is.close();
+        } catch (IOException e) {}
+      if (os != null)
+        try {
+          os.close();
+        } catch (IOException e) {}
+    }
 
-      Uri rawContactPhotoUri = Uri.withAppendedPath(
-          ContentUris.withAppendedId(RawContacts.CONTENT_URI,
-              cursor.getLong(cursor.getColumnIndex("_ID"))),
-          RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
+    return toHex(md5.digest());
 
-      AssetFileDescriptor fd = null;
-      try {
-        fd = getContext().getContentResolver().openAssetFileDescriptor(
-            rawContactPhotoUri, "r");
-      } catch (FileNotFoundException e) {
-        localPhotoExists = false;
-      }
+  }
 
-      // Calculate the MD5 digest of our local photo
+  private boolean updateLocalMeta(Contact contact) {
+    ContentValues updateVals = new ContentValues();
+    String selectionClause = RawContacts._ID + " = ?";
+    String[] selectionArgs = new String[] { Long.toString(contact.rawContactId) };
+    updateVals.put(RawContacts.SYNC4, contact.remoteHash + "|"
+        + contact.localHash);
+    return getContext().getContentResolver().update(RawContacts.CONTENT_URI,
+        updateVals, selectionClause, selectionArgs) > 0;
+  }
 
-      String md5Digest = toHex(getMD5DigestForNull());
-      try {
-        if (localPhotoExists) {
-          InputStream photoDataStream = fd.createInputStream();
-          md5Digest = toHex(getMD5DigestForStream(photoDataStream));
-          fd.close();
-        }
-      } catch (IOException e) {
-        e.printStackTrace();
-        syncResult.stats.numIoExceptions++;
-        localPhotoExists = false;
-      }
+  private void performSyncAuthWrapped(Account account, String authority,
+      SyncResult syncResult, String authToken, String tempPhotoPath)
+      throws PicasaAuthException, IOException, InterruptedException {
 
-      PhotoEntry serverEntry = serverEntries.get(sourceId + ".jpg");
-      boolean serverEntryExists = serverEntry != null;
+    boolean useRootMethod = true;
+    boolean localSaved = false;
 
-      // Determine which way the sync will be.
+    PicasawebService pws = new PicasawebService(getContext());
+    pws.authToken = authToken;
 
+    PicasaAlbum album = ensureAlbumExists(pws);
+    Hashtable<String, PicasaPhoto> serverEntries = retrieveServerEntries(pws,
+        album);
+
+    Collection<Contact> localContacts = getLocalContacts(account.name);
+    if (localContacts == null)
+      throw new IOException("Failed to retrieve list of local contacts.");
+    for (Contact contact : localContacts) {
+      String localHash = makeCopyInCache(contact.rawContactId, tempPhotoPath);
+      boolean localPhotoExists = localHash != null;
+      localHash = localPhotoExists ? localHash : "";
+
+      PicasaPhoto remotePhoto = serverEntries.get(contact.sourceId + ".jpg");
+      boolean remotePhotoExists = remotePhoto != null;
       boolean skipEntry = false;
 
+      FileInputStream fis = null;
+
       try {
 
-        if (!metaHash.equals(md5Digest)
-            || (localPhotoExists && !serverEntryExists)) {
+        if (localPhotoExists && !contact.localHash.equals(localHash)) {
+          Log.i(TAG, "Local -> Remote  for: " + contact.displayName);
 
-          // Phone -> Server sync
-          System.out.println("Phone -> Server for: " + name);
+          // Ensure the local file is valid by decoding it once and throwing
+          // away
+          // the result.
 
-          if (localPhotoExists) {
-            System.out.println("Local photo exists:" + name);
-
-            if (!serverEntryExists) {
-              serverEntry = new PhotoEntry();
-              serverEntry.setTitle(new PlainTextConstruct(sourceId + ".jpg"));
-              serverEntry.setDescription(new PlainTextConstruct(name));
-              serverEntry.setClient(getContext().getResources().getString(
-                  R.string.provider_name));
-            }
-
-            fd = getContext().getContentResolver().openAssetFileDescriptor(
-                rawContactPhotoUri, "r");
-            InputStream photoDataStream = fd.createInputStream();
-            MediaStreamSource mediaSource = new MediaStreamSource(
-                photoDataStream, "image/jpeg");
-            serverEntry.setMediaSource(mediaSource);
-
-            if (!serverEntryExists) {
-              System.out.println("Insert to server:" + name);
-
-              java.net.URL feedUrl = new java.net.URL(
-                  "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
-                      + photosAlbum.getGphotoId());
-              serverEntry = picasaService.insert(feedUrl, serverEntry);
-              syncResult.stats.numInserts++;
-
-            } else {
-              System.out.println("Update to server:" + name);
-
-              picasaService.getRequestFactory().setHeader("If-Match",
-                  serverEntry.getEtag());
-
-              // XXX throws NPE every now and then, can't be f!@#ed figuring
-              // why, so we just abort and try next time
-              try {
-                serverEntry = serverEntry.updateMedia(false);
-              } catch (NullPointerException e) {
-                e.printStackTrace();
-                syncResult.stats.numIoExceptions++;
-                return;
-              }
-
-              picasaService.setHeader("If-Match", null);
-              syncResult.stats.numUpdates++;
-
-            }
-
-            photoDataStream.close();
-            fd.close();
-
-          } else {
-            System.out.println("Local photo doesn't exist:" + name);
-
-            if (serverEntryExists)
-              serverEntry.delete();
-            syncResult.stats.numDeletes++;
+          if (BitmapFactory.decodeFile(tempPhotoPath) == null) {
+            Log.w(TAG, "Local photo for " + contact.displayName
+                + " is corrupted, ignoring");
+            continue;
           }
 
-          String serverEtag = serverEntry == null ? "" : serverEntry.getEtag();
-          String newSync = serverEtag + ":" + md5Digest;
-          ContentValues updateVals = new ContentValues();
-          String selectionClause = RawContacts._ID + " = ?";
-          String[] selectionArgs = new String[] { Long.toString(id) };
-          updateVals.put(RawContacts.SYNC4, newSync);
-          getContext().getContentResolver().update(RawContacts.CONTENT_URI,
-              updateVals, selectionClause, selectionArgs);
+          if (!remotePhotoExists) {
+            remotePhoto = album.createPhoto();
+            remotePhoto.title = contact.sourceId + ".jpg";
+            remotePhoto.summary = contact.displayName;
+          }
 
-        } else if (serverEntry != null
-            && !serverEntry.getEtag().equals(metaEtag)
-            && serverEntry.getMediaContents().size() > 0) {
+          fis = new FileInputStream(tempPhotoPath);
+          remotePhoto.setPhotoStream(fis);
+          remotePhoto = remotePhoto.save();
+          fis.close();
 
-          // Server -> Phone sync
-          System.out.println("Server -> Phone for: " + name);
-
-          String newMD5 = updateLocalPhotoFromServer(serverEntry,
-              rawContactPhotoUri, md5Digest);
-
-          String newSync = serverEntry.getEtag() + ":" + newMD5;
-          ContentValues updateVals = new ContentValues();
-          String selectionClause = RawContacts._ID + " = ?";
-          String[] selectionArgs = new String[] { Long.toString(id) };
-          updateVals.put(RawContacts.SYNC4, newSync);
-          getContext().getContentResolver().update(RawContacts.CONTENT_URI,
-              updateVals, selectionClause, selectionArgs);
-
-          if (localPhotoExists)
-            syncResult.stats.numUpdates++;
-          else
+          if (!remotePhotoExists) {
+            Log.i(TAG, "Insert to remote: " + contact.displayName);
             syncResult.stats.numInserts++;
+          } else {
+            Log.i(TAG, "Updated remote: " + contact.displayName);
+            syncResult.stats.numUpdates++;
+          }
 
-        } else {
-          syncResult.stats.numSkippedEntries++;
+          contact.remoteHash = remotePhoto.getUpdated();
+          contact.localHash = localHash;
+          if (!updateLocalMeta(contact))
+            Log.e(TAG, "Couldn't update local meta for " + contact.displayName);
+
+        } else if (remotePhotoExists
+            && !remotePhoto.getUpdated().equals(contact.remoteHash)) {
+          Log.i(TAG, "Remote -> Local for: " + contact.displayName);
+
+          useRootMethod = useRootMethod
+              && updateLocalFromRemote(account.name, contact, remotePhoto,
+                  useRootMethod);
+          localSaved = true;
         }
 
       } catch (IOException e) {
-        e.printStackTrace();
+        Log.e(TAG, "Skipping entry due to IOException: " + e.getMessage());
         syncResult.stats.numIoExceptions++;
         skipEntry = true;
-      } catch (ServiceException e) {
-        e.printStackTrace();
-        syncResult.stats.numIoExceptions++;
-        skipEntry = true;
+      } finally {
+        if (fis != null)
+          try {
+            fis.close();
+          } catch (IOException e) {}
       }
 
       if (skipEntry)
         syncResult.stats.numSkippedEntries++;
+    }
 
-    } // Contacts for loop
-
-    cursor.close();
+    if (useRootMethod && localSaved)
+      killContactProvider();
   }
 
-  /**
-   * Updates local display photo from the copy on the server.
-   * 
-   * @param serverEntry
-   *          PhotoEntry of the photo on Picasaweb.
-   * @param rawContactPhotoUri
-   *          Local contact photo URI.
-   * @return MD5 digest of the copy on Picasaweb.
-   * @throws IOException
-   */
-  private String updateLocalPhotoFromServer(PhotoEntry serverEntry,
-      Uri rawContactPhotoUri, String existingLocalMD5) throws IOException {
+  private boolean updateLocalFromRemote(String account, Contact contact,
+      PicasaPhoto remotePhoto, boolean useRootMethod) throws IOException,
+      PicasaAuthException, InterruptedException {
+
+    MessageDigest md5 = null;
+    try {
+      md5 = MessageDigest.getInstance("MD5");
+    } catch (NoSuchAlgorithmException e) {}
 
     byte[] buffer = new byte[4096];
-
-    java.net.URL photoUrl = new java.net.URL(serverEntry.getMediaContents()
-        .get(0).getUrl());
-
-    InputStream serverIS = photoUrl.openStream();
-    AssetFileDescriptor fd = getContext().getContentResolver()
-        .openAssetFileDescriptor(rawContactPhotoUri, "w");
-    OutputStream photoOutStream = fd.createOutputStream();
     int bytesRead;
-    while ((bytesRead = serverIS.read(buffer)) > 0)
-      photoOutStream.write(buffer, 0, bytesRead);
-    photoOutStream.close();
-    fd.close();
 
-    // Read the local saved file again (it might have been changed by the
-    // provider) - try until you can read it
-    // UNELSS the server entry is updated because of changes to its metadata
-    // which means, the photo will be the same when saved. For now, just give up
-    // after 2s.
-    // TODO we need to save the checksum/timestamp and check against that
-    // instead of Etag
-    // TODO we also need to delete the local image first, before saving the new
-    // one in case the image hasn't changed
-
-    String md5Digest = null;
-
-    for (int i = 0; i < SAVE_WAIT_MAX / SAVE_WAIT_INT; i++) {
-
-      try {
-        fd = getContext().getContentResolver().openAssetFileDescriptor(
-            rawContactPhotoUri, "r");
-        InputStream photoInStream = fd.createInputStream();
-        md5Digest = toHex(getMD5DigestForStream(photoInStream));
-        photoInStream.close();
-        fd.close();
-        if (existingLocalMD5.equals(md5Digest))
-          System.out.println("Waiting for photo to be updated locally ...");
-        else
-          break;
-      } catch (FileNotFoundException e) {
-        System.err
-            .println("Opening the photo after writing failed! - Retrying ...");
-      }
-
-      try {
-        Thread.sleep(SAVE_WAIT_INT);
-      } catch (InterruptedException e1) {
-        // This should never happen
-        e1.printStackTrace();
-      }
-
-    }
-
-    return md5Digest == null ? existingLocalMD5 : md5Digest;
-
-  }
-
-  /**
-   * Retrieves metadata for all the contact photos on Picasaweb.
-   * 
-   * @param picasaService
-   *          Picasa service object.
-   * @param photosAlbum
-   *          Contact photos album entry.
-   * @return Map between contact SOURCE_ID and its PhotoEntry on Picasaweb.
-   * @throws IOException
-   * @throws ServiceException
-   */
-  private Hashtable<String, PhotoEntry> retrieveServerEntries(
-      PicasawebService picasaService, AlbumEntry photosAlbum)
-      throws IOException, ServiceException {
-    Hashtable<String, PhotoEntry> serverEntries = new Hashtable<String, PhotoEntry>();
-
-    java.net.URL feedUrl = new java.net.URL(
-        "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
-            + photosAlbum.getGphotoId());
-    AlbumFeed feed = null;
-
-    // XXX throws NPE every now and then, can't be f!@#ed figuring why, so we
-    // just abort and try next time
-    try {
-      feed = picasaService.getFeed(feedUrl, AlbumFeed.class);
-    } catch (NullPointerException e) {
-      throw new IOException(e);
-    }
-
-    for (GphotoEntry<PhotoEntry> e : feed.getEntries()) {
-      PhotoEntry photo = new PhotoEntry(e);
-      serverEntries.put(photo.getTitle().getPlainText(), photo);
-    }
-
-    return serverEntries;
-  }
-
-  /**
-   * Ensures an appropriately named album exists on Picasaweb to contain the
-   * contact photos. If one doesn't exist, it creates one.
-   * 
-   * @param picasaService
-   *          Picasa service object.
-   * @return Album entry.
-   * @throws IOException
-   * @throws ServiceException
-   */
-  private AlbumEntry ensureAlbumExists(PicasawebService picasaService)
-      throws IOException, ServiceException {
-
-    String albumName = getContext().getResources().getString(
-        R.string.picasa_album);
+    File tempRawRemote = File.createTempFile("rawremote", "", getContext()
+        .getCacheDir());
+    AssetFileDescriptor fd = null;
+    FileOutputStream fos = null;
+    FileInputStream fis = null;
 
     try {
-      java.net.URL feedUrl = new java.net.URL(
-          "https://picasaweb.google.com/data/feed/api/user/default?kind=album");
-      UserFeed myUserFeed = null;
 
-      // XXX throws NPE every now and then, can't be f!@#ed figuring why, so we
-      // just abort and try next time
+      String rawPhotoHash;
+      String savedPhotoHash = null;
+
+      fos = new FileOutputStream(tempRawRemote);
+      remotePhoto.downloadPhoto(fos);
+      fos.close();
+
+      // Calculate the hash of the downloaded photo
+
+      fis = new FileInputStream(tempRawRemote);
+      md5.reset();
+      bytesRead = fis.read(buffer);
+      while (bytesRead >= 0) {
+        md5.update(buffer, 0, bytesRead);
+        bytesRead = fis.read(buffer);
+      }
+      fis.close();
+      rawPhotoHash = toHex(md5.digest());
+
+      // Delete the current picture
+
+      ArrayList<ContentProviderOperation> ops = new ArrayList<ContentProviderOperation>();
+
+      ops.add(ContentProviderOperation
+          .newUpdate(
+              Data.CONTENT_URI.buildUpon()
+                  .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+                  .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE)
+                  .build())
+          .withSelection(
+              GroupMembership.RAW_CONTACT_ID + " = " + contact.rawContactId,
+              null).withValue(Photo.PHOTO, null).build());
+
       try {
-        myUserFeed = picasaService.getFeed(feedUrl, UserFeed.class);
-      } catch (NullPointerException e) {
+        getContext().getContentResolver().applyBatch(
+            ContactsContract.AUTHORITY, ops);
+      } catch (RemoteException e) {
+        throw new IOException(e);
+      } catch (OperationApplicationException e) {
         throw new IOException(e);
       }
 
-      AlbumEntry photosAlbum = null;
-      for (GphotoEntry<AlbumEntry> e : myUserFeed.getEntries()) {
-        AlbumEntry album = new AlbumEntry(e);
-        if (album.getTitle().getPlainText().equals(albumName)) {
-          photosAlbum = album;
-          break;
+      // Store the image using android API as to update its database
+
+      fis = new FileInputStream(tempRawRemote);
+
+      Uri rawContactPhotoUri = Uri.withAppendedPath(ContentUris.withAppendedId(
+          RawContacts.CONTENT_URI, contact.rawContactId),
+          RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
+      fd = getContext().getContentResolver().openAssetFileDescriptor(
+          rawContactPhotoUri, "w");
+      fos = fd.createOutputStream();
+
+      bytesRead = fis.read(buffer);
+      while (bytesRead >= 0) {
+        fos.write(buffer, 0, bytesRead);
+        bytesRead = fis.read(buffer);
+      }
+
+      fos.close();
+      fd.close();
+      fis.close();
+
+      // Wait until its file ID is available
+
+      int fileId = -1;
+      Uri contactsUri = ContactsContract.Data.CONTENT_URI.buildUpon()
+          .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+          .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+
+      int retryTime = 0;
+      for (; retryTime < WAIT_TIME_DB; retryTime += WAIT_TIME_INT) {
+
+        Cursor cursor = getContext().getContentResolver()
+            .query(
+                contactsUri,
+                new String[] { Photo.PHOTO_FILE_ID,
+                    GroupMembership.RAW_CONTACT_ID },
+                GroupMembership.RAW_CONTACT_ID + " = ?",
+                new String[] { contact.rawContactId + "" }, null);
+
+        try {
+          if (cursor.moveToFirst()) {
+
+            int colIndex = cursor.getColumnIndex(Photo.PHOTO_FILE_ID);
+            if (!cursor.isNull(colIndex)) {
+              fileId = cursor.getInt(colIndex);
+              break;
+            }
+          }
+        } finally {
+          cursor.close();
         }
+
+        Thread.sleep(WAIT_TIME_INT);
       }
 
-      if (photosAlbum == null) {
-        photosAlbum = new AlbumEntry();
-        photosAlbum.setAccess("protected");
-        photosAlbum.setTitle(new PlainTextConstruct(albumName));
-        java.net.URL postUrl = new java.net.URL(
-            "https://picasaweb.google.com/data/feed/api/user/default");
-        photosAlbum = picasaService.insert(postUrl, photosAlbum);
+      if (fileId < 0)
+        throw new IOException("Couldn't get file ID of saved photo");
+
+      // Wait until the actual file is available
+
+      boolean fileAvailable = false;
+      for (; retryTime < WAIT_TIME_DB; retryTime += WAIT_TIME_INT) {
+        try {
+          fd = getContext().getContentResolver().openAssetFileDescriptor(
+              rawContactPhotoUri, "r");
+          fis = fd.createInputStream();
+          md5.reset();
+
+          bytesRead = fis.read(buffer);
+          while (bytesRead >= 0) {
+            md5.update(buffer, 0, bytesRead);
+            bytesRead = fis.read(buffer);
+          }
+          savedPhotoHash = toHex(md5.digest());
+
+          fis.close();
+          fd.close();
+          fileAvailable = true;
+          break;
+        } catch (FileNotFoundException e) {} finally {
+          try {
+            fis.close();
+          } catch (IOException e) {}
+          try {
+            fd.close();
+          } catch (IOException e) {}
+        }
+
+        Thread.sleep(WAIT_TIME_INT);
       }
 
-      return photosAlbum;
+      if (!fileAvailable)
+        throw new IOException("Couldn't get file content of saved photo");
 
-    } catch (MalformedURLException e) {
-      e.printStackTrace();
+      // Use the root method to replace the high quality photo
+
+      boolean rootSuccess = false;
+      if (useRootMethod) {
+        if (rootReplaceImage(tempRawRemote.getAbsolutePath(), fileId))
+          rootSuccess = true;
+      }
+
+      // Update local meta
+
+      contact.localHash = rootSuccess ? rawPhotoHash : savedPhotoHash;
+      contact.remoteHash = remotePhoto.getUpdated();
+      updateLocalMeta(contact);
+
+      return rootSuccess;
+
+    } finally {
+      if (fis != null)
+        try {
+          fis.close();
+        } catch (IOException e) {}
+      if (fos != null)
+        try {
+          fos.close();
+        } catch (IOException e) {}
+      if (fd != null)
+        fd.close();
+      tempRawRemote.delete();
     }
-
-    // This should never happen as all our URLs are perfect!
-
-    return null;
 
   }
 
-  /**
-   * Calculates the MD5 digest for the data in the given stream.
-   * 
-   * @param stream
-   *          Stream to calculate MD5 digest for.
-   * @return
-   * @throws IOException
-   */
-  private byte[] getMD5DigestForStream(InputStream stream) throws IOException {
+  private boolean killContactProvider() {
+    ActivityManager am = (ActivityManager) getContext().getSystemService(
+        Context.ACTIVITY_SERVICE);
+    for (RunningAppProcessInfo proc : am.getRunningAppProcesses())
+      for (String p : proc.pkgList)
+        if (CONTACT_PROVIDER.equals(p))
+          if (Util.runRoot("kill " + proc.pid + "\n"))
+            return true;
+          else
+            return false;
+    return true;
+  }
 
-    MessageDigest md5 = null;
+  private boolean rootReplaceImage(String src, int fileId)
+      throws InterruptedException, IOException {
+
+    int uid;
+    String dstDir;
     try {
-      md5 = MessageDigest.getInstance("MD5");
-    } catch (NoSuchAlgorithmException e) {
+      PackageManager pm = getContext().getPackageManager();
+      PackageInfo pi = pm.getPackageInfo(CONTACT_PROVIDER, 0);
+      uid = pi.applicationInfo.uid;
+      dstDir = pi.applicationInfo.dataDir + PHOTO_DIR;
+    } catch (NameNotFoundException e) {
+      return false;
     }
 
-    byte[] buffer = new byte[4096];
-    int bytesRead;
+    // Modify the permission of our tmp file and move it over to the correct
+    // location + restart contact storage service
 
-    while ((bytesRead = stream.read(buffer)) > 0)
-      md5.update(buffer, 0, bytesRead);
+    if (!Util.runRoot("chown " + uid + ":" + uid + " " + src + "\nchmod 600 "
+        + src + "\nmv " + src + " " + dstDir + "/" + fileId + "\n"))
+      return false;
 
-    return md5.digest();
+    return true;
 
   }
-
-  /**
-   * Calculates the MD5 digest for empty string.
-   * 
-   * @return MD5 digest for empty string.
-   */
-  private byte[] getMD5DigestForNull() {
-    MessageDigest md5 = null;
-    try {
-      md5 = MessageDigest.getInstance("MD5");
-    } catch (NoSuchAlgorithmException e) {
-    }
-
-    return md5.digest();
-  }
-
-  /**
-   * Converts a byte array to string of hex codes, two digit for each byte.
-   * 
-   * @param arr
-   *          Byte array.
-   * @return
-   */
-  private static String toHex(byte[] arr) {
-    String digits = "0123456789abcdef";
-    StringBuilder sb = new StringBuilder(arr.length * 2);
-    for (byte b : arr) {
-      int bi = b & 0xff;
-      sb.append(digits.charAt(bi >> 4));
-      sb.append(digits.charAt(bi & 0xf));
-    }
-    return sb.toString();
-  }
-
 }

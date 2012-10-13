@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item name="config_list_thumb_size" type="integer">80</item>
+    <item name="config_max_photo_dim" type="integer">1500</item>
+    <item name="config_default_jpeg_quality" type="integer">95</item>
+
+</resources>

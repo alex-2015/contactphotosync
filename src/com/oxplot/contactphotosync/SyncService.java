@@ -70,9 +70,10 @@ public class SyncService extends Service {
 
         // Turn on our sync for all existing accounts when the program is first
         // started
+        // XXX Not sure it is a good idea as it makes
 
-        for (Account account : manager.getAccountsByType(ACCOUNT_TYPE))
-          ContentResolver.setSyncAutomatically(account, PHOTO_PROVIDER, true);
+        // for (Account account : manager.getAccountsByType(ACCOUNT_TYPE))
+        // ContentResolver.setSyncAutomatically(account, PHOTO_PROVIDER, true);
 
       }
 

@@ -1,3 +1,24 @@
+/**
+ * AssignContactPhotoActivity.java - Assign photos to contacts of a
+ *                                   specific Google account.
+ * 
+ * Copyright (C) 2012 Mansour <mansour@oxplot.com>
+ * All rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see
+ * <http://www.gnu.org/licenses/>.
+ */
 package com.oxplot.contactphotosync;
 
 import java.io.File;
@@ -12,9 +33,7 @@ import java.util.List;
 import java.util.Set;
 
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.content.ContentUris;
-import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
@@ -57,9 +76,9 @@ public class AssignContactPhotoActivity extends Activity {
 
   private static final int REQ_CODE_PICK_IMAGE = 88;
 
+  private static final String MY_CONTACTS_GROUP = "6";
   private static final String DISK_CACHE_DIR = "thumbcache";
   private static final String ACCOUNT_TYPE = "com.google";
-  private static final int THUMB_SIZE = 80;
 
   private Drawable unchangedThumb;
   private String account;
@@ -73,9 +92,13 @@ public class AssignContactPhotoActivity extends Activity {
   private int pickedRawContact;
   private StoreImageDialog storeImageDialog;
 
+  private int thumbSize;
+
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+
+    thumbSize = getResources().getInteger(R.integer.config_list_thumb_size);
 
     // Initialize cache directory
 
@@ -111,20 +134,23 @@ public class AssignContactPhotoActivity extends Activity {
         case StoreImageDialog.RESULT_SUCCESS:
           removeDiskCache(pickedRawContact);
           thumbMemCache.remove(pickedRawContact);
-          Toast.makeText(AssignContactPhotoActivity.this, "Voila!",
-              Toast.LENGTH_LONG).show();
+          // Toast.makeText(AssignContactPhotoActivity.this, "Voila!",
+          // Toast.LENGTH_LONG).show();
           break;
         case StoreImageDialog.RESULT_NO_ROOT:
           Toast.makeText(AssignContactPhotoActivity.this,
-              "You need to be rooted to do that.", Toast.LENGTH_LONG).show();
+              getResources().getString(R.string.need_to_be_root),
+              Toast.LENGTH_LONG).show();
           break;
         case StoreImageDialog.RESULT_IO_ERROR:
           Toast.makeText(AssignContactPhotoActivity.this,
-              "Uh OH! Something went wrong.", Toast.LENGTH_LONG).show();
+              getResources().getString(R.string.something_went_wrong),
+              Toast.LENGTH_LONG).show();
           break;
         default:
           Toast.makeText(AssignContactPhotoActivity.this,
-              "This shouldn't happen.", Toast.LENGTH_LONG).show();
+              getResources().getString(R.string.saving_cancelled),
+              Toast.LENGTH_LONG).show();
         }
 
       }
@@ -196,8 +222,9 @@ public class AssignContactPhotoActivity extends Activity {
             null);
 
         if (cursor == null) {
-          Toast.makeText(this, "Woops something went wrong", Toast.LENGTH_LONG)
-              .show();
+          Toast.makeText(this,
+              getResources().getString(R.string.something_went_wrong),
+              Toast.LENGTH_LONG).show();
           return;
         }
 
@@ -216,7 +243,8 @@ public class AssignContactPhotoActivity extends Activity {
 
         if (!params.mimeType.startsWith("image/")) {
           // XXX this is almost invisible in Holo theme (Holo.Light is fine)
-          Toast.makeText(this, "Only image files can be used. Pick again.",
+          Toast.makeText(this,
+              getResources().getString(R.string.only_image_allowed),
               Toast.LENGTH_LONG).show();
           return;
         }
@@ -304,7 +332,7 @@ public class AssignContactPhotoActivity extends Activity {
         is.close();
         fd.close();
 
-        opts.inSampleSize = opts.outHeight / THUMB_SIZE;
+        opts.inSampleSize = opts.outHeight / thumbSize;
         opts.inSampleSize = opts.inSampleSize < 1 ? 1 : opts.inSampleSize;
         opts.inJustDecodeBounds = false;
         fd = getContentResolver().openAssetFileDescriptor(rawContactPhotoUri,
@@ -346,9 +374,8 @@ public class AssignContactPhotoActivity extends Activity {
         } else if (result != unchangedThumb) {
           thumbMemCache.put(rawContactId, result);
           writeDiskCache(rawContactId, ((BitmapDrawable) result).getBitmap());
-          // thumbMemCache.put(rawContactId, result);
-          ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
         }
+        ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
       }
     }
   }
@@ -374,7 +401,7 @@ public class AssignContactPhotoActivity extends Activity {
 
           String sourceId = cursor.getString(cursor
               .getColumnIndex(ContactsContract.Groups.SOURCE_ID));
-          if (sourceId.equals("6")) {
+          if (MY_CONTACTS_GROUP.equals(sourceId)) {
             myContactGroupId = cursor.getInt(cursor
                 .getColumnIndex(ContactsContract.Groups._ID));
             break;
@@ -394,7 +421,7 @@ public class AssignContactPhotoActivity extends Activity {
             new String[] { GroupMembership.DISPLAY_NAME,
                 GroupMembership.RAW_CONTACT_ID },
             GroupMembership.GROUP_ROW_ID + " = " + myContactGroupId, null,
-            GroupMembership.DISPLAY_NAME);
+            "lower(" + GroupMembership.DISPLAY_NAME + ")");
 
         if (cursor == null)
           return null;
@@ -402,7 +429,7 @@ public class AssignContactPhotoActivity extends Activity {
         ArrayList<Contact> contacts = new ArrayList<Contact>();
         try {
           if (!cursor.moveToFirst())
-            return null;
+            return contacts;
           do {
             Contact c = new Contact();
             c.rawContactId = cursor.getInt(cursor

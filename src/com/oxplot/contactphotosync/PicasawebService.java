@@ -1,3 +1,24 @@
+/**
+ * PicasawebService.java - Simple Picasaweb API Library.
+ * 
+ * Copyright (C) 2012 Mansour <mansour@oxplot.com>
+ * All rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see
+ * <http://www.gnu.org/licenses/>.
+ */
+
 package com.oxplot.contactphotosync;
 
 import java.io.BufferedReader;
@@ -108,8 +129,7 @@ public class PicasawebService {
           R.raw.photo));
       photoUpdateXML = inputStreamToString(context.getResources()
           .openRawResource(R.raw.photo_update));
-    } catch (NotFoundException e) {
-    }
+    } catch (NotFoundException e) {}
   }
 
   private static String inputStreamToString(InputStream stream)
@@ -226,6 +246,7 @@ public class PicasawebService {
   public class PicasaAlbum {
     private String id;
     private String editUrl;
+    private String updated;
     public String title;
     public String summary;
     public String access;
@@ -237,12 +258,17 @@ public class PicasawebService {
       access = decodeXML(extractRegex(data,
           "<gphoto:access>([^<]+)</gphoto:access>"));
       id = decodeXML(extractRegex(data, "<gphoto:id>([^<]+)</gphoto:id>"));
+      updated = decodeXML(extractRegex(data, "<updated>([^<]+)</updated>"));
       editUrl = decodeXML(extractRegex(data,
           "<link rel='edit' type='application/atom[+]xml' href='([^']*)"));
     }
 
     private PicasaAlbum() {
 
+    }
+
+    public String getUpdated() {
+      return updated;
     }
 
     public PicasaAlbum save() throws PicasaAuthException, IOException {
@@ -333,8 +359,7 @@ public class PicasawebService {
       title = decodeXML(extractRegex(data, "<title type='text'>([^<]+)</title>"));
       summary = decodeXML(extractRegex(data,
           "<summary type='text'>([^<]+)</summary>"));
-      updated = decodeXML(extractRegex(data,
-          "<gphoto:timestamp>([^<]+)</gphoto:timestamp>"));
+      updated = decodeXML(extractRegex(data, "<updated>([^<]+)</updated>"));
       id = decodeXML(extractRegex(data, "<gphoto:id>([^<]+)</gphoto:id>"));
       editUrl = decodeXML(extractRegex(data,
           "<link rel='edit' type='application/atom[+]xml' href='([^']*)"));

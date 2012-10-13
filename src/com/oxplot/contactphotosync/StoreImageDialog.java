@@ -1,6 +1,26 @@
+/**
+ * StoreImageDialog.java - Stores picked photo to phone storage.
+ * 
+ * Copyright (C) 2012 Mansour <mansour@oxplot.com>
+ * All rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see
+ * <http://www.gnu.org/licenses/>.
+ */
+
 package com.oxplot.contactphotosync;
 
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -55,19 +75,24 @@ public class StoreImageDialog extends ProgressDialog {
   private static final String CONTACT_PROVIDER = "com.android.providers.contacts";
 
   private static final int TILE_SIZE = 256;
-  private static final int MAX_DIMEN = 1500;
-  private static final int JPEG_QUALITY = 95;
   private static final int WAIT_TIME_DB = 5000;
   private static final int WAIT_TIME_INT = 50;
 
   private StoreImageTask task;
   private int finalResult = RESULT_NA;
 
+  private final int maxPhotoDim;
+  private final int defaultJPEGQuality;
+
   public StoreImageDialog(Context context) {
     super(context);
+    maxPhotoDim = context.getResources().getInteger(
+        R.integer.config_max_photo_dim);
+    defaultJPEGQuality = context.getResources().getInteger(
+        R.integer.config_default_jpeg_quality);
     setIndeterminate(true);
     setCancelable(true);
-    setMessage("Saving contact photo");
+    setMessage(context.getResources().getString(R.string.saving_in_progress));
   }
 
   @Override
@@ -112,8 +137,6 @@ public class StoreImageDialog extends ProgressDialog {
       opts.inPreferQualityOverSpeed = true;
 
       try {
-        // Get the image bounds in case image is too large and we need to use
-        // bigger sample sizes.
         opts.inJustDecodeBounds = true;
 
         fdin = getContext().getContentResolver().openAssetFileDescriptor(p.uri,
@@ -131,7 +154,7 @@ public class StoreImageDialog extends ProgressDialog {
 
         // Do we need to process the image at all?
 
-        if (opts.outHeight > MAX_DIMEN || opts.outWidth > MAX_DIMEN
+        if (opts.outHeight > maxPhotoDim || opts.outWidth > maxPhotoDim
             || opts.outHeight != opts.outWidth
             || !opts.outMimeType.equals("image/jpeg"))
           needProcessing = true;
@@ -153,7 +176,7 @@ public class StoreImageDialog extends ProgressDialog {
           // Center crop the image
 
           int minDimen = Math.min(opts.outHeight, opts.outWidth);
-          int finalDimen = Math.min(minDimen, MAX_DIMEN);
+          int finalDimen = Math.min(minDimen, maxPhotoDim);
           Bitmap cropped = Bitmap.createBitmap(finalDimen, finalDimen,
               Bitmap.Config.ARGB_8888);
           Canvas canvas = new Canvas(cropped);
@@ -186,7 +209,7 @@ public class StoreImageDialog extends ProgressDialog {
           }
 
           os = new FileOutputStream(tmpPath);
-          cropped.compress(CompressFormat.JPEG, JPEG_QUALITY, os);
+          cropped.compress(CompressFormat.JPEG, defaultJPEGQuality, os);
           os.close();
 
           cropped.recycle();
@@ -199,6 +222,8 @@ public class StoreImageDialog extends ProgressDialog {
 
           fdin = getContext().getContentResolver().openAssetFileDescriptor(
               p.uri, "r");
+          // TODO Getting a compiler hint that this leaks the previous stream.
+          // Gotta check the code paths again.
           is = fdin.createInputStream();
           os = new FileOutputStream(tmpPath);
 
@@ -347,37 +372,6 @@ public class StoreImageDialog extends ProgressDialog {
       }
     }
 
-    private boolean runRoot(String dataIn) {
-      Process p = null;
-
-      try {
-        p = Runtime.getRuntime().exec("su");
-        DataOutputStream os = new DataOutputStream(p.getOutputStream());
-
-        if (dataIn != null)
-          os.writeBytes(dataIn);
-
-        os.writeBytes("\nexit\n");
-        os.flush();
-        try {
-          p.waitFor();
-          if (p.exitValue() != 255) {
-            return true;
-          } else {
-            return false;
-          }
-        } catch (InterruptedException e) {
-          return false;
-        }
-
-      } catch (IOException e) {
-        return false;
-      } finally {
-        if (p != null)
-          p.destroy();
-      }
-    }
-
     private boolean rootReplaceImage(String src, int fileId)
         throws InterruptedException, IOException {
 
@@ -399,7 +393,7 @@ public class StoreImageDialog extends ProgressDialog {
           Context.ACTIVITY_SERVICE);
       for (RunningAppProcessInfo proc : am.getRunningAppProcesses())
         for (String p : proc.pkgList)
-          if ("com.android.providers.contacts".equals(p)) {
+          if (CONTACT_PROVIDER.equals(p)) {
             killCommand = "kill " + proc.pid + "\n";
             break;
           }
@@ -407,7 +401,7 @@ public class StoreImageDialog extends ProgressDialog {
       // Modify the permission of our tmp file and move it over to the correct
       // location + restart contact storage service
 
-      if (!runRoot("chown " + uid + ":" + uid + " " + src + "\nchmod 600 "
+      if (!Util.runRoot("chown " + uid + ":" + uid + " " + src + "\nchmod 600 "
           + src + "\nmv " + src + " " + dstDir + "/" + fileId + "\n"
           + killCommand))
         return false;

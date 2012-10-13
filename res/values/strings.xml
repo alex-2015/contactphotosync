@@ -3,12 +3,16 @@
 
     <string name="app_name">Contact Photo Sync</string>
     <string name="provider_name">Contact Photos</string>
-    <string name="picasa_album">Android Contact Photos</string>
+    <string name="picasa_album_title">Android Contact Photos</string>
+    <string name="picasa_album_summary">Backup of your high quality android contact photos that can be later synced back to your phone when needed.</string>
     <string name="menu_settings">Settings</string>
-    <string name="menu_groups">Visible Groups</string>
     <string name="title_activity_assign_contact_photo">Assign Contact Photo</string>
     <string name="title_activity_select_account">Select Account</string>
     <string name="no_google_accounts">You have no Google accounts configured.\nGo to Settings > Accounts to add one.</string>
     <string name="no_contacts">No contacts to show.</string>
-
+    <string name="need_to_be_root">Root access is required to save high resolution photo.</string>
+    <string name="something_went_wrong">UH OH! Something went wrong!</string>
+    <string name="saving_cancelled">Saving of photo cancelled.</string>
+    <string name="only_image_allowed">Only image files can be used.</string>
+	<string name="saving_in_progress">Saving</string>
 </resources>
