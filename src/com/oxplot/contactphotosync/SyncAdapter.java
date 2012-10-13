@@ -36,6 +36,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Hashtable;
 
 import android.accounts.Account;
@@ -135,36 +136,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     public String sourceId;
   }
 
-  private boolean populateContactEntry(String account, Contact contact) {
-    Uri contactsUri = RawContacts.CONTENT_URI.buildUpon()
-        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
-        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
-    Cursor cursor = getContext().getContentResolver().query(
-        contactsUri,
-        new String[] { RawContacts.SOURCE_ID, RawContacts.SYNC4,
-            RawContacts.DISPLAY_NAME_PRIMARY },
-        RawContacts._ID + " = " + contact.rawContactId, null, null);
-    if (cursor == null)
-      return false;
-    try {
-      if (!cursor.moveToFirst())
-        return false;
-      contact.sourceId = cursor.getString(cursor
-          .getColumnIndex(RawContacts.SOURCE_ID));
-      contact.displayName = cursor.getString(cursor
-          .getColumnIndex(RawContacts.DISPLAY_NAME_PRIMARY));
-      String sync4 = cursor.getString(cursor.getColumnIndex(RawContacts.SYNC4));
-      sync4 = sync4 == null ? "" : sync4;
-      String[] sync4Parts = (sync4 + "|").split("[|]", -1);
-      contact.remoteHash = sync4Parts[0];
-      contact.localHash = sync4Parts[1];
-      return true;
-    } finally {
-      cursor.close();
-    }
-  }
-
   private Collection<Contact> getLocalContacts(String account) {
+
+    ArrayList<Contact> contacts = new ArrayList<Contact>();
+
+    // Find the group ID of My Contacts group
 
     Uri groupsUri = ContactsContract.Groups.CONTENT_URI.buildUpon()
         .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
@@ -194,6 +170,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     if (myContactGroupId < 0)
       return null;
 
+    // Get the list of contacts in My Contacts group
+
     Uri contactsUri = ContactsContract.Data.CONTENT_URI.buildUpon()
         .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
         .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
@@ -204,18 +182,53 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     if (cursor == null)
       return null;
 
-    ArrayList<Contact> contacts = new ArrayList<Contact>();
+    HashSet<Integer> ids = new HashSet<Integer>();
+
     try {
       if (!cursor.moveToFirst())
         return contacts;
       do {
-        Contact c = new Contact();
-        c.rawContactId = cursor.getInt(cursor
-            .getColumnIndex(GroupMembership.RAW_CONTACT_ID));
-        if (!populateContactEntry(account, c))
-          return null;
-        contacts.add(c);
+        ids.add(cursor.getInt(cursor
+            .getColumnIndex(GroupMembership.RAW_CONTACT_ID)));
       } while (cursor.moveToNext());
+    } finally {
+      cursor.close();
+    }
+
+    // Get the rest of raw contact data
+
+    Uri rawContactsUri = RawContacts.CONTENT_URI.buildUpon()
+        .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+        .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE).build();
+    cursor = getContext().getContentResolver().query(
+        rawContactsUri,
+        new String[] { RawContacts._ID, RawContacts.SOURCE_ID,
+            RawContacts.SYNC4, RawContacts.DISPLAY_NAME_PRIMARY }, null, null,
+        null);
+    if (cursor == null)
+      return null;
+    try {
+      if (!cursor.moveToFirst())
+        return contacts;
+      do {
+        int id = cursor.getInt(cursor.getColumnIndex(RawContacts._ID));
+        if (ids.contains(id)) {
+          Contact c = new Contact();
+          c.rawContactId = id;
+          c.sourceId = cursor.getString(cursor
+              .getColumnIndex(RawContacts.SOURCE_ID));
+          c.displayName = cursor.getString(cursor
+              .getColumnIndex(RawContacts.DISPLAY_NAME_PRIMARY));
+          String sync4 = cursor.getString(cursor
+              .getColumnIndex(RawContacts.SYNC4));
+          sync4 = sync4 == null ? "" : sync4;
+          String[] sync4Parts = (sync4 + "|").split("[|]", -1);
+          c.remoteHash = sync4Parts[0];
+          c.localHash = sync4Parts[1];
+          contacts.add(c);
+        }
+      } while (cursor.moveToNext());
+
     } finally {
       cursor.close();
     }
