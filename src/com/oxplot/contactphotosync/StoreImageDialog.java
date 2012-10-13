@@ -412,12 +412,13 @@ public class StoreImageDialog extends ProgressDialog {
 
     @Override
     protected void onPostExecute(Integer result) {
-      super.onPostExecute(result);
-      if (!isCancelled()) {
-        finalResult = result;
-      } else {
-        finalResult = RESULT_CANCELLED;
-      }
+      finalResult = result;
+      dismiss();
+    }
+
+    @Override
+    protected void onCancelled() {
+      finalResult = RESULT_CANCELLED;
       dismiss();
     }
 

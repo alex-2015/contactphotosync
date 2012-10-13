@@ -28,13 +28,19 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import android.accounts.Account;
 import android.app.Activity;
+import android.app.ProgressDialog;
+import android.content.ContentResolver;
 import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.DialogInterface;
+import android.content.DialogInterface.OnCancelListener;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
@@ -44,6 +50,7 @@ import android.graphics.Bitmap.CompressFormat;
 import android.graphics.Bitmap.Config;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapFactory.Options;
+import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -57,10 +64,12 @@ import android.provider.MediaStore.Images.Media;
 import android.support.v4.app.NavUtils;
 import android.support.v4.app.TaskStackBuilder;
 import android.util.SparseArray;
+import android.view.ActionMode;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AbsListView.MultiChoiceModeListener;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.BaseAdapter;
@@ -79,13 +88,15 @@ public class AssignContactPhotoActivity extends Activity {
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String DISK_CACHE_DIR = "thumbcache";
   private static final String ACCOUNT_TYPE = "com.google";
+  private static final String CONTENT_AUTHORITY = "com.oxplot.contactphotos";
 
   private Drawable unchangedThumb;
   private String account;
   private ListView contactList;
   private TextView emptyList;
   private ProgressBar loadingProgress;
-  private LoadContactCursorTask contactCursorLoader;
+  private LoadContactsTask contactsLoader;
+  private DownloadUploadTask downloadUploadTask;
   private SparseArray<Drawable> thumbMemCache;
   private Set<AsyncTask<?, ?, ?>> asyncTasks;
   private Drawable defaultThumb;
@@ -115,6 +126,9 @@ public class AssignContactPhotoActivity extends Activity {
     contactList.setEmptyView(loadingProgress);
     contactList.setAdapter(new ContactAdapter());
     contactList.setDividerHeight(1);
+    contactList
+        .setMultiChoiceModeListener(new ContactListMultiChoiceModeListener());
+    contactList.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE_MODAL);
 
     getActionBar().setDisplayHomeAsUpEnabled(true);
     account = getIntent().getStringExtra("account");
@@ -130,10 +144,12 @@ public class AssignContactPhotoActivity extends Activity {
       @Override
       public void onDismiss(DialogInterface dialog) {
         int status = storeImageDialog.getResult();
+
+        removeDiskCache(pickedRawContact);
+        thumbMemCache.remove(pickedRawContact);
+
         switch (status) {
         case StoreImageDialog.RESULT_SUCCESS:
-          removeDiskCache(pickedRawContact);
-          thumbMemCache.remove(pickedRawContact);
           // Toast.makeText(AssignContactPhotoActivity.this, "Voila!",
           // Toast.LENGTH_LONG).show();
           break;
@@ -266,6 +282,7 @@ public class AssignContactPhotoActivity extends Activity {
     return true;
   }
 
+  @SuppressWarnings("unchecked")
   @Override
   public boolean onMenuItemSelected(int featureId, MenuItem item) {
     switch (item.getItemId()) {
@@ -277,15 +294,37 @@ public class AssignContactPhotoActivity extends Activity {
         NavUtils.navigateUpTo(this, upIntent);
       }
       return true;
+    case R.id.menu_sync_now:
+      Account a = new Account(account, ACCOUNT_TYPE);
+      ContentResolver.setSyncAutomatically(a, CONTENT_AUTHORITY, true);
+      ContentResolver.requestSync(a, CONTENT_AUTHORITY, new Bundle());
+      Toast.makeText(this, getResources().getString(R.string.sync_requested),
+          Toast.LENGTH_LONG).show();
+      break;
+    case R.id.menu_download_all:
+    case R.id.menu_upload_all:
+      if (downloadUploadTask != null)
+        downloadUploadTask.cancel(true);
+      downloadUploadTask = new DownloadUploadTask(
+          item.getItemId() == R.id.menu_download_all ? DownloadUploadTask.TYPE_DOWNLOAD
+              : DownloadUploadTask.TYPE_UPLOAD);
+      downloadUploadTask.execute(((ContactAdapter) contactList.getAdapter())
+          .getBackingList());
 
+      break;
+    case R.id.menu_refresh:
+      thumbMemCache.clear();
+      refresh();
+      break;
     }
     return super.onOptionsItemSelected(item);
   }
 
   @Override
   protected void onPause() {
-    if (contactCursorLoader != null)
-      contactCursorLoader.cancel(false);
+    thumbMemCache.clear();
+    if (contactsLoader != null)
+      contactsLoader.cancel(false);
     for (AsyncTask<?, ?, ?> lt : asyncTasks)
       lt.cancel(false);
     super.onPause();
@@ -298,10 +337,10 @@ public class AssignContactPhotoActivity extends Activity {
   }
 
   private void refresh() {
-    if (contactCursorLoader != null)
-      contactCursorLoader.cancel(false);
-    contactCursorLoader = new LoadContactCursorTask();
-    contactCursorLoader.execute(account);
+    if (contactsLoader != null)
+      contactsLoader.cancel(false);
+    contactsLoader = new LoadContactsTask();
+    contactsLoader.execute(account);
   }
 
   private class LoadThumbTask extends AsyncTask<Integer, Void, Drawable> {
@@ -365,23 +404,19 @@ public class AssignContactPhotoActivity extends Activity {
 
     @Override
     protected void onPostExecute(Drawable result) {
-      super.onPostExecute(result);
       asyncTasks.remove(this);
-      if (!isCancelled()) {
-        if (result == null) {
-          thumbMemCache.put(rawContactId, defaultThumb);
-          removeDiskCache(rawContactId);
-        } else if (result != unchangedThumb) {
-          thumbMemCache.put(rawContactId, result);
-          writeDiskCache(rawContactId, ((BitmapDrawable) result).getBitmap());
-        }
-        ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
+      if (result == null) {
+        thumbMemCache.put(rawContactId, defaultThumb);
+        removeDiskCache(rawContactId);
+      } else if (result != unchangedThumb) {
+        thumbMemCache.put(rawContactId, result);
+        writeDiskCache(rawContactId, ((BitmapDrawable) result).getBitmap());
       }
+      ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
     }
   }
 
-  private class LoadContactCursorTask extends
-      AsyncTask<String, Void, List<Contact>> {
+  private class LoadContactsTask extends AsyncTask<String, Void, List<Contact>> {
 
     @Override
     protected List<Contact> doInBackground(String... params) {
@@ -437,6 +472,8 @@ public class AssignContactPhotoActivity extends Activity {
             c.displayName = cursor.getString(cursor
                 .getColumnIndex(Data.DISPLAY_NAME));
             contacts.add(c);
+            if (isCancelled())
+              return null;
           } while (cursor.moveToNext());
         } finally {
           cursor.close();
@@ -450,8 +487,7 @@ public class AssignContactPhotoActivity extends Activity {
 
     @Override
     protected void onPostExecute(List<Contact> result) {
-      super.onPostExecute(result);
-      if (!isCancelled() && result != null) {
+      if (result != null) {
         ContactAdapter adapter = (ContactAdapter) contactList.getAdapter();
         adapter.refresh(result);
       }
@@ -469,7 +505,14 @@ public class AssignContactPhotoActivity extends Activity {
 
   private class ContactAdapter extends BaseAdapter {
 
+    private final int selectedColor = Color.parseColor("#8833b5e5");
+    private final int unselectedColor = Color.TRANSPARENT;
+
     private ArrayList<Contact> items = new ArrayList<Contact>();
+
+    public List<Contact> getBackingList() {
+      return Collections.unmodifiableList(items);
+    }
 
     public void refresh(List<Contact> newList) {
       items.clear();
@@ -494,6 +537,7 @@ public class AssignContactPhotoActivity extends Activity {
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
+      boolean checked = contactList.isItemChecked(position);
       Contact c = items.get(position);
 
       Drawable thumb = thumbMemCache.get(c.rawContactId);
@@ -515,9 +559,163 @@ public class AssignContactPhotoActivity extends Activity {
       ((TextView) topView.findViewById(R.id.name)).setText(c.displayName);
       ((ImageView) topView.findViewById(R.id.photo))
           .setBackgroundDrawable(thumb);
+      topView.setBackgroundColor(checked ? selectedColor : unselectedColor);
       return topView;
+    }
+  }
+
+  private class DownloadUploadTask extends
+      AsyncTask<List<Contact>, Void, Integer> {
+
+    public static final int TYPE_DOWNLOAD = 0;
+    public static final int TYPE_UPLOAD = 1;
+    private static final int BATCH_SIZE = 50;
+    private ProgressDialog dialog;
+    private int type;
+
+    public DownloadUploadTask(int type) {
+      super();
+      this.type = type;
+      dialog = new ProgressDialog(AssignContactPhotoActivity.this);
+      dialog.setTitle(getResources().getString(
+          type == TYPE_DOWNLOAD ? R.string.queuing_for_download
+              : R.string.queuing_for_upload));
+
+      dialog.setIndeterminate(true);
+      dialog.setCancelable(true);
+      dialog.setOnCancelListener(new OnCancelListener() {
+        @Override
+        public void onCancel(DialogInterface dialog) {
+          cancel(true);
+        }
+      });
+      dialog.show();
+    }
+
+    @Override
+    protected Integer doInBackground(List<Contact>... arg0) {
+      List<Contact> contacts = arg0[0];
+      ContentValues updateVals = new ContentValues();
+
+      if (type == TYPE_DOWNLOAD)
+        updateVals.put(RawContacts.SYNC4, SyncAdapter.OVERRIDE_TAG + "|");
+      else if (type == TYPE_UPLOAD)
+        updateVals.put(RawContacts.SYNC4, "|" + SyncAdapter.OVERRIDE_TAG);
+
+      for (int i = 0; i < contacts.size(); i += BATCH_SIZE) {
+        StringBuffer inVals = new StringBuffer();
+        int maxIndex = Math.min(BATCH_SIZE + i, contacts.size()) - i;
+        for (int j = 0; j < maxIndex; j++)
+          inVals.append(contacts.get(i + j).rawContactId + ",");
+        inVals.deleteCharAt(inVals.length() - 1);
+        String selectionClause = RawContacts._ID + " IN (" + inVals + ")";
+        getContentResolver().update(RawContacts.CONTENT_URI, updateVals,
+            selectionClause, new String[] {});
+        if (isCancelled())
+          return 0;
+      }
+
+      return contacts.size();
+    }
+
+    @Override
+    protected void onCancelled() {
+      dialog.dismiss();
+    }
+
+    @Override
+    protected void onPostExecute(Integer result) {
+      dialog.dismiss();
+      Toast
+          .makeText(
+              AssignContactPhotoActivity.this,
+              String.format(
+                  getResources().getString(
+                      type == TYPE_DOWNLOAD ? R.string.queued_for_download
+                          : R.string.queued_for_upload), result),
+              Toast.LENGTH_LONG).show();
+    }
+  }
+
+  private class ContactListMultiChoiceModeListener implements
+      MultiChoiceModeListener {
+
+    private HashSet<Integer> selectedPos;
+
+    @SuppressWarnings("unchecked")
+    private void uploadDownloadPhoto(int dir) {
+      ArrayList<Contact> selectedContacts = new ArrayList<Contact>();
+      List<Contact> allContacts = ((ContactAdapter) contactList.getAdapter())
+          .getBackingList();
+      for (int p : selectedPos)
+        selectedContacts.add(allContacts.get(p));
+
+      if (downloadUploadTask != null)
+        downloadUploadTask.cancel(true);
+      downloadUploadTask = new DownloadUploadTask(dir);
+      downloadUploadTask.execute(selectedContacts);
+    }
+
+    private void removePhoto() {
+      // TODO not sure if we really need this one
+    }
+
+    @Override
+    public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+      switch (item.getItemId()) {
+
+      case R.id.menu_upload_photo:
+      case R.id.menu_download_photo:
+        uploadDownloadPhoto(item.getItemId() == R.id.menu_download_photo ? DownloadUploadTask.TYPE_DOWNLOAD
+            : DownloadUploadTask.TYPE_UPLOAD);
+        break;
+
+      case R.id.menu_remove_photo:
+        removePhoto();
+        break;
+
+      }
+      mode.finish();
+      return true;
+    }
+
+    @Override
+    public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+      selectedPos = new HashSet<Integer>();
+      mode.setSubtitle(R.string.selected);
+      mode.getMenuInflater().inflate(R.menu.action_contact_list, menu);
+      return true;
+    }
+
+    @Override
+    public void onDestroyActionMode(ActionMode mode) {
+
+    }
+
+    @Override
+    public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+      setTitle(mode);
+      return true;
+    }
+
+    @Override
+    public void onItemCheckedStateChanged(ActionMode mode, int position,
+        long id, boolean checked) {
+      if (checked)
+        selectedPos.add(position);
+      else
+        selectedPos.remove(position);
+      setTitle(mode);
+    }
+
+    private void setTitle(ActionMode mode) {
+      int count = contactList.getCheckedItemCount();
+      mode.setTitle(count
+          + " "
+          + getResources().getString(
+              count > 1 ? R.string.contacts : R.string.contact));
+      ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
     }
 
   }
-
 }

@@ -39,7 +39,7 @@ public class Util {
       os.flush();
       try {
         p.waitFor();
-        if (p.exitValue() != 255) {
+        if (p.exitValue() == 0) {
           return true;
         } else {
           return false;

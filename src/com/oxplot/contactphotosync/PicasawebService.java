@@ -311,7 +311,24 @@ public class PicasawebService {
       return new PicasaPhoto(this);
     }
 
-    public PicasaPhoto getPhoto(String id) {
+    public PicasaPhoto getPhoto(String id) throws IOException,
+        PicasaAuthException {
+      String url = "https://picasaweb.google.com/data/entry/api/user/default/albumid/"
+          + this.id + "/photoid/" + id + "?imgmax=1600";
+      ByteArrayOutputStream baOut = new ByteArrayOutputStream();
+      int status = performPWCmd("GET", url, null, null, baOut);
+
+      if (status == HttpURLConnection.HTTP_NOT_FOUND)
+        return null;
+      if (status != HttpURLConnection.HTTP_OK)
+        throw new IOException("Got " + status
+            + " HTTP status when retrieving photo " + id + ".");
+
+      Pattern entryPat = Pattern.compile("<entry>.+?</entry>", Pattern.DOTALL);
+      Matcher m = entryPat.matcher(baOut.toString("UTF-8"));
+      if (m.find())
+        return new PicasaPhoto(this, m.group());
+
       return null;
     }
 
@@ -343,7 +360,7 @@ public class PicasawebService {
   }
 
   public class PicasaPhoto {
-    private String updated;
+    private String uniqueId;
     private String id;
     private PicasaAlbum album;
     private InputStream photoStream;
@@ -359,7 +376,8 @@ public class PicasawebService {
       title = decodeXML(extractRegex(data, "<title type='text'>([^<]+)</title>"));
       summary = decodeXML(extractRegex(data,
           "<summary type='text'>([^<]+)</summary>"));
-      updated = decodeXML(extractRegex(data, "<updated>([^<]+)</updated>"));
+      uniqueId = decodeXML(extractRegex(data,
+          "<exif:imageUniqueID>([^<]+)</exif:imageUniqueID>"));
       id = decodeXML(extractRegex(data, "<gphoto:id>([^<]+)</gphoto:id>"));
       editUrl = decodeXML(extractRegex(data,
           "<link rel='edit' type='application/atom[+]xml' href='([^']*)"));
@@ -374,8 +392,8 @@ public class PicasawebService {
       this.album = album;
     }
 
-    public String getUpdated() {
-      return updated;
+    public String getUniqueId() {
+      return uniqueId;
     }
 
     public String getId() {

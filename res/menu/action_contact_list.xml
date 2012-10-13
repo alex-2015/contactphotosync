@@ -1,0 +1,23 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android" >
+
+    <item
+        android:id="@+id/menu_remove_photo"
+        android:icon="@drawable/remove"
+        android:orderInCategory="100"
+        android:showAsAction="always"
+        android:title="@string/menu_remove_photo"
+        android:visible="false"/>
+    <item
+        android:id="@+id/menu_download_photo"
+        android:icon="@drawable/download"
+        android:orderInCategory="100"
+        android:showAsAction="always"
+        android:title="@string/menu_download_photo"/>
+    <item
+        android:id="@+id/menu_upload_photo"
+        android:icon="@drawable/upload"
+        android:orderInCategory="100"
+        android:showAsAction="always"
+        android:title="@string/menu_upload_photo"/>
+
+</menu>

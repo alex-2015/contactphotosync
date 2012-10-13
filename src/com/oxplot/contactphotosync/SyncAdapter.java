@@ -70,6 +70,7 @@ import com.oxplot.contactphotosync.PicasawebService.PicasaPhoto;
 
 public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
+  public static final String OVERRIDE_TAG = "@*@";
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String PHOTO_DIR = "/files/photos";
   private static final String CONTACT_PROVIDER = "com.android.providers.contacts";
@@ -192,6 +193,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
   @Override
   public void onPerformSync(Account account, Bundle extras, String authority,
       ContentProviderClient provider, SyncResult syncResult) {
+
+    // Let's see if the user is willing to give us root permission at the very
+    // start
+
+    Util.runRoot("");
 
     // Get the authentication token for the given account, invalidate it and get
     // another one as to avoid the headache of dealing with an expired token.
@@ -352,6 +358,14 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
       FileInputStream fis = null;
 
+      if (OVERRIDE_TAG.equals(contact.localHash)) {
+        contact.remoteHash = remotePhotoExists ? remotePhoto.getUniqueId() : "";
+        contact.localHash = "";
+      } else if (OVERRIDE_TAG.equals(contact.remoteHash)) {
+        contact.localHash = localHash;
+        contact.remoteHash = "";
+      }
+
       try {
 
         if (localPhotoExists && !contact.localHash.equals(localHash)) {
@@ -386,13 +400,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
             syncResult.stats.numUpdates++;
           }
 
-          contact.remoteHash = remotePhoto.getUpdated();
+          contact.remoteHash = remotePhoto.getUniqueId();
           contact.localHash = localHash;
           if (!updateLocalMeta(contact))
             Log.e(TAG, "Couldn't update local meta for " + contact.displayName);
 
         } else if (remotePhotoExists
-            && !remotePhoto.getUpdated().equals(contact.remoteHash)) {
+            && !remotePhoto.getUniqueId().equals(contact.remoteHash)) {
           Log.i(TAG, "Remote -> Local for: " + contact.displayName);
 
           useRootMethod = useRootMethod
@@ -587,7 +601,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       // Update local meta
 
       contact.localHash = rootSuccess ? rawPhotoHash : savedPhotoHash;
-      contact.remoteHash = remotePhoto.getUpdated();
+      contact.remoteHash = remotePhoto.getUniqueId();
       updateLocalMeta(contact);
 
       return rootSuccess;
