@@ -4,6 +4,7 @@
     <string name="app_name">Contact Photo Sync</string>
     <string name="title_activity_assign_contact_photo">Assign Contact Photo</string>
     <string name="title_activity_select_account">Select Account</string>
+    <string name="title_activity_crop_photo">Crop Photo</string>
     <string name="menu_settings">Settings</string>
     <string name="menu_sync_now">Sync now</string>
     <string name="menu_refresh">Refresh</string>
@@ -12,6 +13,8 @@
     <string name="menu_remove_photo">Remove photo</string>
     <string name="menu_upload_photo">Upload photo</string>
     <string name="menu_download_photo">Download photo</string>
+    <string name="menu_crop">Crop</string>
+    <string name="menu_cancel_crop">Cancel crop</string>
     <string name="provider_name">Contact Photos</string>
     <string name="picasa_album_title">Android Contact Photos</string>
     <string name="picasa_album_summary">Backup of your high quality android contact photos that can be later synced back to your phone when needed.</string>

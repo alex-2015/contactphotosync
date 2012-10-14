@@ -42,13 +42,13 @@ public class SelectAccountActivity extends Activity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    setTitle(getResources().getString(R.string.title_activity_select_account));
 
     // Let's see if the user is willing to give us root permission at the very
     // start
     Util.runRoot("");
 
     setContentView(R.layout.activity_select_account);
-    setTitle(getResources().getString(R.string.title_activity_select_account));
     getActionBar().setHomeButtonEnabled(false);
     list = (ListView) findViewById(R.id.list);
     adapter = new ArrayAdapter<String>(this, R.layout.account_row, R.id.row);

@@ -6,15 +6,17 @@
 
     <ImageView
         android:id="@+id/photo"
-        android:layout_width="70dp"
-        android:layout_height="70dp" />
+        android:layout_width="65dp"
+        android:layout_height="65dp" />
 
     <TextView
         android:id="@+id/name"
-        android:layout_width="wrap_content"
+        android:layout_width="fill_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="center_vertical|left"
+        android:ellipsize="marquee"
         android:padding="@dimen/padding_large"
+        android:singleLine="true"
         android:textAppearance="?android:attr/textAppearanceMedium" />
 
 </LinearLayout>
