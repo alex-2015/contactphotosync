@@ -50,6 +50,7 @@ public class CropPhotoActivity extends Activity {
   private int maxWidth;
   private int maxHeight;
   private String mimeType;
+  private Menu menu;
 
   @Override
   public void onCreate(Bundle savedState) {
@@ -142,7 +143,11 @@ public class CropPhotoActivity extends Activity {
 
   @Override
   public boolean onCreateOptionsMenu(Menu menu) {
+    this.menu = menu;
+
     getMenuInflater().inflate(R.menu.activity_crop_photo, menu);
+    if (loaded)
+      menu.findItem(R.id.menu_crop).setVisible(true);
     return true;
   }
 
@@ -338,6 +343,7 @@ public class CropPhotoActivity extends Activity {
         cropView.setCropBound(bound);
         loaded = true;
         initAfterLoad();
+        menu.findItem(R.id.menu_crop).setVisible(true);
       } else {
         Toast.makeText(CropPhotoActivity.this,
             getResources().getString(R.string.something_went_wrong),
@@ -365,7 +371,30 @@ public class CropPhotoActivity extends Activity {
       dialog.setMessage("Cropping in progress");
       dialog.setCancelable(false);
       dialog.show();
-      bounds = cropView.getCropBound();
+      RectF cropBounds = cropView.getCropBound();
+      bounds = new RectF(cropBounds);
+      // Rotate the dimensions and bound to match the original image
+
+      switch (orientation) {
+      case 90:
+        bounds.left = cropBounds.top;
+        bounds.top = cropView.getOrgWidth() - cropBounds.right;
+        bounds.right = cropBounds.bottom;
+        bounds.bottom = cropView.getOrgWidth() - cropBounds.left;
+        break;
+      case 180:
+        bounds.left = cropView.getOrgWidth() - cropBounds.right;
+        bounds.top = cropView.getOrgHeight() - cropBounds.bottom;
+        bounds.right = cropView.getOrgWidth() - cropBounds.left;
+        bounds.bottom = cropView.getOrgHeight() - cropBounds.top;
+        break;
+      case 270:
+        bounds.left = cropView.getOrgHeight() - cropBounds.bottom;
+        bounds.top = cropBounds.left;
+        bounds.right = cropView.getOrgHeight() - cropBounds.top;
+        bounds.bottom = cropBounds.right;
+        break;
+      }
       orgOutWidth = orientation % 180 == 0 ? cropView.getOrgWidth() : cropView
           .getOrgHeight();
       orgOutHeight = orientation % 180 == 0 ? cropView.getOrgHeight()
@@ -382,37 +411,31 @@ public class CropPhotoActivity extends Activity {
         finalScale = (float) maxWidth / (bounds.right - bounds.left);
       if (finalScale * (bounds.bottom - bounds.top) > maxHeight)
         finalScale = (float) maxHeight / (bounds.bottom - bounds.top);
-      int outImgW = (int) Math.round(finalScale * (bounds.right - bounds.left));
-      int outImgH = (int) Math.round(finalScale * (bounds.bottom - bounds.top));
+      int outImgW = (int) Math.round(finalScale
+          * (orientation % 180 == 0 ? bounds.right - bounds.left
+              : bounds.bottom - bounds.top));
+      int outImgH = (int) Math.round(finalScale
+          * (orientation % 180 == 0 ? bounds.bottom - bounds.top : bounds.right
+              - bounds.left));
 
-      int inImgW = (int) Math.round(orientation % 180 == 0 ? Math
-          .abs(bounds.left - bounds.right) : Math.abs(bounds.top
-          - bounds.bottom));
-      int inImgH = (int) Math.round(orientation % 180 == 0 ? Math
-          .abs(bounds.top - bounds.bottom) : Math.abs(bounds.left
-          - bounds.right));
+      int inImgW = (int) Math.round(bounds.right - bounds.left);
+      int inImgH = (int) Math.round(bounds.bottom - bounds.top);
       int inImgX = (int) Math.round(bounds.left);
       int inImgY = (int) Math.round(bounds.top);
+
+      m.postScale(finalScale, finalScale);
       switch (orientation) {
-      case 90:
-        inImgX = (int) Math.round(bounds.top);
-        inImgY = (int) Math.round(orgOutWidth - bounds.right);
-        m.preTranslate(finalScale * outImgW, 0);
+      case 270:
+        m.postTranslate(-outImgH, 0);
         break;
       case 180:
-        inImgX = (int) Math.round(orgOutWidth - bounds.right);
-        inImgY = (int) Math.round(orgOutHeight - bounds.bottom);
-        m.preTranslate(finalScale * outImgW, finalScale * outImgH);
+        m.postTranslate(-outImgW, -outImgH);
         break;
-      case 270:
-        inImgX = (int) Math.round(orgOutHeight - bounds.bottom);
-        inImgY = (int) Math.round(bounds.left);
-        m.preTranslate(0, finalScale * outImgH);
+      case 90:
+        m.postTranslate(0, -outImgW);
         break;
       }
-
-      m.preRotate(orientation);
-      m.preScale(finalScale, finalScale);
+      m.postRotate(orientation);
 
       AssetFileDescriptor fdout = null, fdin = null;
       InputStream is = null;
@@ -452,7 +475,7 @@ public class CropPhotoActivity extends Activity {
           Canvas canvas = new Canvas(outBitmap);
           Paint paint = new Paint();
           paint.setFilterBitmap(true);
-          canvas.setMatrix(m);
+          canvas.concat(m);
           for (int x = 0; x < inImgW; x += REGION_SIZE) {
             for (int y = 0; y < inImgH; y += REGION_SIZE) {
               regionBound.left = inImgX + x;
@@ -473,6 +496,7 @@ public class CropPhotoActivity extends Activity {
         }
 
       } catch (IOException e) {
+        e.printStackTrace();
         return FAILED;
       } finally {
         if (os != null)

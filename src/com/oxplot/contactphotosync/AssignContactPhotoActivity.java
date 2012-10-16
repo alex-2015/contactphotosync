@@ -73,6 +73,7 @@ import android.provider.ContactsContract.RawContacts;
 import android.provider.MediaStore.Images.Media;
 import android.support.v4.app.NavUtils;
 import android.support.v4.app.TaskStackBuilder;
+import android.util.Log;
 import android.util.SparseArray;
 import android.view.ActionMode;
 import android.view.Menu;
@@ -91,8 +92,10 @@ import android.widget.Toast;
 
 public class AssignContactPhotoActivity extends Activity {
 
+  private static final String TAG = "AssignContactPhoto";
   private static final int REQ_CODE_PICK_IMAGE = 88;
   private static final int REQ_CODE_CROP_IMAGE = 99;
+  private static final int THUMB_MEM_CACHE_LIMIT = 100;
 
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String DISK_CACHE_DIR = "thumbcache";
@@ -162,6 +165,13 @@ public class AssignContactPhotoActivity extends Activity {
       }
     });
 
+  }
+  
+  private void putToThumbMemCache(int id, Drawable d) {
+    // XXX very naive way of doing this
+    if (thumbMemCache.size() >= THUMB_MEM_CACHE_LIMIT)
+      thumbMemCache.clear();
+    thumbMemCache.put(id, d);
   }
 
   private void removeDiskCache(int id) {
@@ -403,10 +413,10 @@ public class AssignContactPhotoActivity extends Activity {
     protected void onPostExecute(Drawable result) {
       asyncTasks.remove(this);
       if (result == null) {
-        thumbMemCache.put(rawContactId, defaultThumb);
+        putToThumbMemCache(rawContactId, defaultThumb);
         removeDiskCache(rawContactId);
       } else if (result != unchangedThumb) {
-        thumbMemCache.put(rawContactId, result);
+        putToThumbMemCache(rawContactId, result);
         writeDiskCache(rawContactId, ((BitmapDrawable) result).getBitmap());
       }
       ((ContactAdapter) contactList.getAdapter()).notifyDataSetChanged();
@@ -543,10 +553,10 @@ public class AssignContactPhotoActivity extends Activity {
             .execute(c.rawContactId));
         Bitmap fromDisk = readDiskCache(c.rawContactId);
         if (fromDisk != null)
-          thumbMemCache.put(c.rawContactId, new BitmapDrawable(getResources(),
+          putToThumbMemCache(c.rawContactId, new BitmapDrawable(getResources(),
               fromDisk));
         else
-          thumbMemCache.put(c.rawContactId, defaultThumb);
+          putToThumbMemCache(c.rawContactId, defaultThumb);
       }
       thumb = thumbMemCache.get(c.rawContactId);
 
@@ -897,8 +907,10 @@ public class AssignContactPhotoActivity extends Activity {
             return RESULT_CANCELLED;
         }
 
-        if (fileId < 0)
+        if (fileId < 0) {
+          Log.e(TAG, "File ID didn't show up in db after saving");
           return RESULT_IO_ERROR;
+        }
 
         // Wait until the actual file is available
 
@@ -938,6 +950,7 @@ public class AssignContactPhotoActivity extends Activity {
       } catch (InterruptedException e) {
         return RESULT_IO_ERROR;
       } catch (IOException e) {
+        e.printStackTrace();
         return RESULT_IO_ERROR;
       } finally {
         try {

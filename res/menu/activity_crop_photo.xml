@@ -5,7 +5,8 @@
         android:icon="@drawable/tick"
         android:orderInCategory="10"
         android:showAsAction="always"
-        android:title="@string/menu_crop"/>
+        android:title="@string/menu_crop"
+        android:visible="false"/>
     <item
         android:id="@+id/menu_cancel_crop"
         android:icon="@drawable/cross"

@@ -689,10 +689,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
       ops.add(ContentProviderOperation
           .newUpdate(
-              Data.CONTENT_URI.buildUpon()
+              Data.CONTENT_URI
+                  .buildUpon()
                   .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
                   .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE)
-                  .build())
+                  .appendQueryParameter(ContactsContract.CALLER_IS_SYNCADAPTER,
+                      "true").build())
           .withSelection(
               GroupMembership.RAW_CONTACT_ID + " = " + contact.rawContactId,
               null).withValue(Photo.PHOTO, null).build());
@@ -710,9 +712,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
       fis = new FileInputStream(tempRawRemote);
 
-      Uri rawContactPhotoUri = Uri.withAppendedPath(ContentUris.withAppendedId(
-          RawContacts.CONTENT_URI, contact.rawContactId),
-          RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
+      Uri rawContactPhotoUri = Uri
+          .withAppendedPath(
+              ContentUris.withAppendedId(RawContacts.CONTENT_URI,
+                  contact.rawContactId),
+              RawContacts.DisplayPhoto.CONTENT_DIRECTORY).buildUpon()
+          .appendQueryParameter(ContactsContract.CALLER_IS_SYNCADAPTER, "true")
+          .build();
       fd = getContext().getContentResolver().openAssetFileDescriptor(
           rawContactPhotoUri, "w");
       fos = fd.createOutputStream();
