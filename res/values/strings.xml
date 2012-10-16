@@ -34,6 +34,6 @@
     <string name="contacts">contacts</string>
     <string name="removing_photos">Removing photos</string>
     <string name="removed_photos">%0$s photos removed</string>
-    <string name="picasaweb_readme">Here are contact photos from your Android phone uploaded by Contact Photo Sync app (http://goo.gl/R581Z). You can upload photos to this album yourself but for them to sync to your phone, they must be JPEG format, perfectly square and no larger than %0$dx%0$d.</string>
+    <string name="picasaweb_readme">Here are contact photos from your Android phone uploaded by Contact Photo Sync app (http://goo.gl/R581Z). You can upload photos to this album yourself but for them to sync to your phone, they must be in JPEG format, perfectly square and no larger than %0$dx%0$d.</string>
 
 </resources>
