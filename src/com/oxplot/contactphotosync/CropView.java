@@ -53,6 +53,9 @@ public class CropView extends View {
   private float minCropW;
   private float minCropH;
   private boolean enforceRatio;
+  private int maxImageWidth;
+  private int maxImageHeight;
+  private boolean enforceMaxSize;
 
   public CropView(Context context, AttributeSet attrs) {
     super(context, attrs);
@@ -95,6 +98,33 @@ public class CropView extends View {
     handlePath.lineTo(HANDLE_SIZE, 0);
     handlePath.lineTo(0, -HANDLE_SIZE);
     handlePath.lineTo(-HANDLE_SIZE, 0);
+  }
+
+  public boolean isEnforceMaxSize() {
+    return enforceMaxSize;
+  }
+
+  public void setEnforceMaxSize(boolean enforceMaxSize) {
+    this.enforceMaxSize = enforceMaxSize;
+    fixBound(CORNER_BR);
+  }
+
+  public int getMaxImageWidth() {
+    return maxImageWidth;
+  }
+
+  public void setMaxImageWidth(int maxImageWidth) {
+    this.maxImageWidth = maxImageWidth;
+    fixBound(CORNER_BR);
+  }
+
+  public int getMaxImageHeight() {
+    return maxImageHeight;
+  }
+
+  public void setMaxImageHeight(int maxImageHeight) {
+    this.maxImageHeight = maxImageHeight;
+    fixBound(CORNER_BR);
   }
 
   public boolean isEnforceRatio() {
@@ -152,13 +182,20 @@ public class CropView extends View {
     if (corner != CORNER_MID) {
       float fw = bound.right - bound.left;
       float fh = bound.bottom - bound.top;
-      fw = fw < minCropW ? minCropW : fw;
-      fh = fh < minCropH ? minCropH : fh;
+      fw = Math.max(fw, minCropW);
+      fh = Math.max(fh, minCropH);
 
-      if ((fw * cropHRatio) / cropWRatio <= fh)
-        fh = (fw * cropHRatio) / cropWRatio;
-      else
-        fw = (fh * cropWRatio) / cropHRatio;
+      if (enforceMaxSize) {
+        fw = Math.min(fw, maxImageWidth);
+        fh = Math.min(fh, maxImageHeight);
+      }
+
+      if (enforceRatio) {
+        if ((fw * cropHRatio) / cropWRatio <= fh)
+          fh = (fw * cropHRatio) / cropWRatio;
+        else
+          fw = (fh * cropWRatio) / cropHRatio;
+      }
 
       if (corner == CORNER_BR || corner == CORNER_TR)
         bound.right = bound.left + fw;

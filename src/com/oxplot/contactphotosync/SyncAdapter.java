@@ -75,6 +75,8 @@ import com.oxplot.contactphotosync.PicasawebService.PicasaPhoto;
 
 public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
+  private static final String README_TITLE = "acps-readme.png";
+  private static final String REMOTE_TITLE_PREFIX = "acps-";
   public static final String OVERRIDE_TAG = "@*@";
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String PHOTO_DIR = "/files/photos";
@@ -84,8 +86,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
   private static final int WAIT_TIME_DB = 5000;
   private static final int WAIT_TIME_INT = 50;
 
+  private final int maxPhotoDim;
+  private final String picasaReadmeText;
+
   public SyncAdapter(Context context, boolean autoInitialize) {
     super(context, autoInitialize);
+    maxPhotoDim = context.getResources().getInteger(
+        R.integer.config_max_photo_dim);
+    picasaReadmeText = String.format(
+        context.getResources().getString(R.string.picasaweb_readme),
+        maxPhotoDim, maxPhotoDim);
   }
 
   private static String toHex(byte[] arr) {
@@ -99,7 +109,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     return sb.toString();
   }
 
-  private byte[] toMD5(InputStream stream) throws IOException {
+  private static byte[] toMD5(InputStream stream) throws IOException {
 
     MessageDigest md5 = null;
     try {
@@ -120,12 +130,20 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
   }
 
-  private byte[] toMD5(String string) throws IOException {
+  private static byte[] toMD5(String string) throws IOException {
     try {
       return toMD5(new ByteArrayInputStream(string.getBytes("UTF-8")));
     } catch (UnsupportedEncodingException e) {
       throw new IOException(e);
     }
+  }
+
+  private static String sourceIdToFilename(String sourceId) {
+    return REMOTE_TITLE_PREFIX + sourceId + ".jpg";
+  }
+
+  private static String sourceIdToOldStyleFilename(String sourceId) {
+    return sourceId + ".jpg";
   }
 
   private static class Contact {
@@ -222,7 +240,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
           String sync4 = cursor.getString(cursor
               .getColumnIndex(RawContacts.SYNC4));
           sync4 = sync4 == null ? "" : sync4;
-          String[] sync4Parts = (sync4 + "|").split("[|]", -1);
+          String[] sync4Parts = (sync4 + ":").split("[:]", -1);
           c.remoteHash = sync4Parts[0];
           c.localHash = sync4Parts[1];
           contacts.add(c);
@@ -274,11 +292,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       tempPhotoPath = File.createTempFile("syncltr", "", getContext()
           .getCacheDir());
       performSyncAuthWrapped(account, authority, syncResult, authToken,
-          tempPhotoPath.getAbsolutePath());
+          tempPhotoPath);
     } catch (PicasaAuthException e) {
+      System.err.println(e);
       syncResult.stats.numAuthExceptions++;
       return;
     } catch (IOException e) {
+      System.err.println(e);
       syncResult.stats.numIoExceptions++;
       return;
     } catch (InterruptedException e) {
@@ -335,27 +355,61 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
   private Hashtable<String, PicasaPhoto> retrieveServerEntries(String account,
       PicasawebService pws, PicasaAlbum album) throws IOException,
       PicasaAuthException {
-    Hashtable<String, PicasaPhoto> serverEntries;
+    Hashtable<String, PicasaPhoto> finalEntries;
 
     String accNameHash = toHex(toMD5(account));
     String tsHash = toHex(toMD5(album.getUpdated()));
     String baseName = "serverentries-" + accNameHash + "-";
     File cachePath = new File(getContext().getCacheDir(), baseName + tsHash);
 
-    if (cachePath.exists()) {
-      serverEntries = retrieveServerEntriesFromCache(album, cachePath);
+    // XXX Unfortunately the timestamp on album entry doesn't change for trivial
+    // edits to photos (e.g. edit of summary text) so we have to request a fresh
+    // list for the time being.
+    if (false && cachePath.exists()) {
+      Log.d(TAG, "Loaded server entries from cache.");
+      finalEntries = retrieveServerEntriesFromCache(album, cachePath);
     } else {
+      Log.d(TAG, "Loading server entries fresh.");
 
       for (File f : getContext().getCacheDir().listFiles())
         if (f.getName().startsWith(baseName))
           f.delete();
 
-      serverEntries = new Hashtable<String, PicasaPhoto>();
-      for (PicasaPhoto p : album.listPhotos())
-        serverEntries.put(p.title, p);
-      storeServerEntriesToCache(serverEntries.values(), cachePath);
+      PicasaPhoto readmeEntry = null;
+      finalEntries = new Hashtable<String, PicasaPhoto>();
+      for (PicasaPhoto p : album.listPhotos()) {
+        if ("image/png".equals(p.getMimeType()) && README_TITLE.equals(p.title)) {
+          readmeEntry = p;
+          continue;
+        }
+        if (!"image/jpeg".equals(p.getMimeType())
+            || p.getWidth() != p.getHeight() || p.getWidth() > maxPhotoDim
+            || p.getHeight() > maxPhotoDim) {
+          Log.d(TAG, "Ignored " + p.title + " due to failing img req.");
+          continue;
+        }
+        finalEntries.put(p.title, p);
+      }
+
+      if (readmeEntry == null) {
+        readmeEntry = album.createPhoto();
+        Log.d(TAG, "Readme photo is missing. Adding it.");
+      }
+      if (!picasaReadmeText.equals(readmeEntry.summary)) {
+        Log.d(TAG, "Readme photo has wrong summary.");
+        PicasaPhoto readmePhoto = album.createPhoto();
+        readmePhoto.title = README_TITLE;
+        readmePhoto.summary = picasaReadmeText;
+        InputStream is = getContext().getResources().openRawResource(
+            R.drawable.readme);
+        readmePhoto.setPhotoStream(is);
+        readmePhoto.save();
+        is.close();
+      }
+
+      storeServerEntriesToCache(finalEntries.values(), cachePath);
     }
-    return serverEntries;
+    return finalEntries;
   }
 
   private PicasaAlbum ensureAlbumExists(PicasawebService pws)
@@ -363,22 +417,30 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
     String albumName = getContext().getResources().getString(
         R.string.picasa_album_title);
-    String albumSummary = getContext().getResources().getString(
-        R.string.picasa_album_summary);
 
+    PicasaAlbum album = null;
     for (PicasaAlbum a : pws.listAlbums())
-      if (albumName.equals(a.title))
-        return a;
+      if (albumName.equals(a.title)) {
+        album = a;
+        break;
+      }
 
-    PicasaAlbum newAlbum = pws.createAlbum();
-    newAlbum.access = "protected";
-    newAlbum.title = albumName;
-    newAlbum.summary = albumSummary;
+    if (album == null) {
+      Log.d(TAG, "Album doesn't exist");
+      album = pws.createAlbum();
+    }
+    if (picasaReadmeText.equals(album.summary))
+      return album;
+    Log.d(TAG, "Album doesn't have correct summary");
 
-    return newAlbum.save();
+    album.access = "protected";
+    album.title = albumName;
+    album.summary = picasaReadmeText;
+
+    return album.save();
   }
 
-  private String makeCopyInCache(int rawContactId, String tempPhotoPath)
+  private String makeCopyInCache(int rawContactId, File tempPhoto)
       throws IOException {
     MessageDigest md5 = null;
     try {
@@ -401,7 +463,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     OutputStream os = null;
     try {
       is = fd.createInputStream();
-      os = new FileOutputStream(tempPhotoPath);
+      os = new FileOutputStream(tempPhoto);
 
       byte[] buffer = new byte[4096];
       int bytesRead = is.read(buffer);
@@ -430,15 +492,47 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     ContentValues updateVals = new ContentValues();
     String selectionClause = RawContacts._ID + " = ?";
     String[] selectionArgs = new String[] { Long.toString(contact.rawContactId) };
-    updateVals.put(RawContacts.SYNC4, contact.remoteHash + "|"
+    updateVals.put(RawContacts.SYNC4, contact.remoteHash + ":"
         + contact.localHash);
     return getContext().getContentResolver().update(RawContacts.CONTENT_URI,
         updateVals, selectionClause, selectionArgs) > 0;
   }
 
+  private PicasaPhoto getRemoteEntry(
+      Hashtable<String, PicasaPhoto> serverEntries, Contact contact)
+      throws PicasaAuthException, IOException {
+    PicasaPhoto picked = serverEntries
+        .get(sourceIdToFilename(contact.sourceId));
+    if (picked != null)
+      return picked;
+    String oldStyleFilename = sourceIdToOldStyleFilename(contact.sourceId);
+    picked = serverEntries.get(oldStyleFilename);
+    if (picked != null) {
+      Log.d(TAG, "Old style picture for " + contact.displayName + "("
+          + contact.sourceId + ") found.");
+      picked.title = sourceIdToFilename(contact.sourceId);
+      picked = picked.save();
+      serverEntries.put(picked.title, picked);
+      return picked;
+    }
+    // XXX the worst way of doing this, need a hashtable or something
+    String contactName = contact.displayName.trim().toLowerCase();
+    for (PicasaPhoto p : serverEntries.values()) {
+      if (p.summary.trim().toLowerCase().equals(contactName)) {
+        serverEntries.remove(p.title);
+        p.title = sourceIdToFilename(contact.sourceId);
+        p = p.save();
+        serverEntries.put(p.title, p);
+        return p;
+      }
+    }
+    return null;
+  }
+
   private void performSyncAuthWrapped(Account account, String authority,
-      SyncResult syncResult, String authToken, String tempPhotoPath)
+      SyncResult syncResult, String authToken, File tempPhoto)
       throws PicasaAuthException, IOException, InterruptedException {
+    tempPhoto.delete();
 
     boolean useRootMethod = true;
     boolean localSaved = false;
@@ -453,23 +547,28 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
     Collection<Contact> localContacts = getLocalContacts(account.name);
     if (localContacts == null)
       throw new IOException("Failed to retrieve list of local contacts.");
+
     for (Contact contact : localContacts) {
-      String localHash = makeCopyInCache(contact.rawContactId, tempPhotoPath);
+
+      String localHash = makeCopyInCache(contact.rawContactId, tempPhoto);
       boolean localPhotoExists = localHash != null;
       localHash = localPhotoExists ? localHash : "";
 
-      PicasaPhoto remotePhoto = serverEntries.get(contact.sourceId + ".jpg");
+      PicasaPhoto remotePhoto = getRemoteEntry(serverEntries, contact);
       boolean remotePhotoExists = remotePhoto != null;
       boolean skipEntry = false;
 
       FileInputStream fis = null;
+      boolean metaUpdated = false;
 
       if (OVERRIDE_TAG.equals(contact.localHash)) {
         contact.remoteHash = remotePhotoExists ? remotePhoto.getUniqueId() : "";
         contact.localHash = "";
+        metaUpdated = true;
       } else if (OVERRIDE_TAG.equals(contact.remoteHash)) {
         contact.localHash = localHash;
         contact.remoteHash = "";
+        metaUpdated = true;
       }
 
       try {
@@ -478,10 +577,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
           Log.i(TAG, "Local -> Remote  for: " + contact.displayName);
 
           // Ensure the local file is valid by decoding it once and throwing
-          // away
-          // the result.
+          // away the result.
 
-          if (BitmapFactory.decodeFile(tempPhotoPath) == null) {
+          if (!tempPhoto.exists())
+            makeCopyInCache(contact.rawContactId, tempPhoto);
+
+          if (BitmapFactory.decodeFile(tempPhoto.getAbsolutePath()) == null) {
             Log.w(TAG, "Local photo for " + contact.displayName
                 + " is corrupted, ignoring");
             continue;
@@ -489,11 +590,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
           if (!remotePhotoExists) {
             remotePhoto = album.createPhoto();
-            remotePhoto.title = contact.sourceId + ".jpg";
+            remotePhoto.title = sourceIdToFilename(contact.sourceId);
             remotePhoto.summary = contact.displayName;
           }
 
-          fis = new FileInputStream(tempPhotoPath);
+          fis = new FileInputStream(tempPhoto);
           remotePhoto.setPhotoStream(fis);
           remotePhoto = remotePhoto.save();
           fis.close();
@@ -508,8 +609,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
           contact.remoteHash = remotePhoto.getUniqueId();
           contact.localHash = localHash;
-          if (!updateLocalMeta(contact))
-            Log.e(TAG, "Couldn't update local meta for " + contact.displayName);
+          metaUpdated = true;
 
         } else if (remotePhotoExists
             && !remotePhoto.getUniqueId().equals(contact.remoteHash)) {
@@ -519,6 +619,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
               && updateLocalFromRemote(account.name, contact, remotePhoto,
                   useRootMethod);
           localSaved = true;
+          metaUpdated = true;
         }
 
       } catch (IOException e) {
@@ -530,6 +631,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
           try {
             fis.close();
           } catch (IOException e) {}
+        if (metaUpdated && !updateLocalMeta(contact))
+          Log.e(TAG, "Couldn't update local meta for " + contact.displayName);
+        tempPhoto.delete();
       }
 
       if (skipEntry)
@@ -708,7 +812,6 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
       contact.localHash = rootSuccess ? rawPhotoHash : savedPhotoHash;
       contact.remoteHash = remotePhoto.getUniqueId();
-      updateLocalMeta(contact);
 
       return rootSuccess;
 

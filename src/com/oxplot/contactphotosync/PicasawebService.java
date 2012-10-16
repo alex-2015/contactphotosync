@@ -50,6 +50,7 @@ import android.content.res.Resources.NotFoundException;
 public class PicasawebService {
 
   public static final String PW_SERVICE_NAME = "lh2";
+  private static final String PHOTO_FIELD_PARAM = "&fields=entry(title,summary,gphoto:id,gphoto:width,gphoto:height,content,link[@rel='edit'],link[@rel='edit-media'],exif:tags(exif:imageUniqueID))";
 
   public String authToken;
 
@@ -336,11 +337,7 @@ public class PicasawebService {
     public PicasaPhoto getPhoto(String id) throws IOException,
         PicasaAuthException {
       String url = "https://picasaweb.google.com/data/entry/api/user/default/albumid/"
-          + this.id
-          + "/photoid/"
-          + id
-          + "?imgmax=1600"
-          + "&fields=entry(title,summary,gphoto:id,content,link[@rel='edit'],link[@rel='edit-media'],exif:tags(exif:imageUniqueID))";
+          + this.id + "/photoid/" + id + "?imgmax=1600" + PHOTO_FIELD_PARAM;
       ByteArrayOutputStream baOut = new ByteArrayOutputStream();
       int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -361,9 +358,7 @@ public class PicasawebService {
     public Collection<PicasaPhoto> listPhotos() throws IOException,
         PicasaAuthException {
       String url = "https://picasaweb.google.com/data/feed/api/user/default/albumid/"
-          + id
-          + "?imgmax=1600&max-results=1000000"
-          + "&fields=entry(title,summary,gphoto:id,content,link[@rel='edit'],link[@rel='edit-media'],exif:tags(exif:imageUniqueID))";
+          + id + "?imgmax=1600&max-results=1000000" + PHOTO_FIELD_PARAM;
       ByteArrayOutputStream baOut = new ByteArrayOutputStream();
       int status = performPWCmd("GET", url, null, null, baOut);
 
@@ -395,6 +390,9 @@ public class PicasawebService {
     private String editUrl;
     private String editMediaUrl;
     private String photoUrl;
+    private String mimeType;
+    private int width;
+    private int height;
     public String title;
     public String summary;
 
@@ -410,14 +408,32 @@ public class PicasawebService {
       editUrl = decodeXML(extractRegex(data,
           "<link rel='edit' type='application/atom[+]xml' href='([^']*)"));
       editMediaUrl = decodeXML(extractRegex(data,
-          "<link rel='edit-media' type='image/jpeg' href='([^']*)"));
+          "<link rel='edit-media' type='image/[^']+' href='([^']*)"));
+      mimeType = decodeXML(extractRegex(data,
+          "<content type='(image/[^']+)' src"));
       photoUrl = decodeXML(
-          extractRegex(data, "<content type='image/jpeg' src='([^']*)"))
+          extractRegex(data, "<content type='image/[^']+' src='([^']*)"))
           .replace("/s1600/", "/s0/");
+      width = Integer.parseInt(decodeXML(extractRegex(data,
+          "<gphoto:width>([^<]+)</gphoto:width>")));
+      height = Integer.parseInt(decodeXML(extractRegex(data,
+          "<gphoto:height>([^<]+)</gphoto:height>")));
     }
 
     private PicasaPhoto(PicasaAlbum album) {
       this.album = album;
+    }
+
+    public int getWidth() {
+      return width;
+    }
+
+    public int getHeight() {
+      return height;
+    }
+
+    public String getMimeType() {
+      return mimeType;
     }
 
     public String getUniqueId() {

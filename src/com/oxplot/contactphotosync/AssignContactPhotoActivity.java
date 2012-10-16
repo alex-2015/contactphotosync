@@ -27,6 +27,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -35,16 +36,21 @@ import java.util.Set;
 
 import android.accounts.Account;
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.app.ActivityManager.RunningAppProcessInfo;
 import android.app.ProgressDialog;
 import android.content.ContentProviderOperation;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
-import android.content.DialogInterface.OnDismissListener;
 import android.content.Intent;
 import android.content.OperationApplicationException;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -83,11 +89,10 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.oxplot.contactphotosync.StoreImageDialog.StoreImageParams;
-
 public class AssignContactPhotoActivity extends Activity {
 
   private static final int REQ_CODE_PICK_IMAGE = 88;
+  private static final int REQ_CODE_CROP_IMAGE = 99;
 
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String DISK_CACHE_DIR = "thumbcache";
@@ -104,9 +109,10 @@ public class AssignContactPhotoActivity extends Activity {
   private Set<AsyncTask<?, ?, ?>> asyncTasks;
   private Drawable defaultThumb;
   private int pickedRawContact;
-  private StoreImageDialog storeImageDialog;
+  private StoreImageTask storeImageTask;
 
   private int thumbSize;
+  private File cropTemp;
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
@@ -141,44 +147,11 @@ public class AssignContactPhotoActivity extends Activity {
     asyncTasks = new HashSet<AsyncTask<?, ?, ?>>();
     defaultThumb = getResources().getDrawable(R.drawable.new_picture);
 
-    storeImageDialog = new StoreImageDialog(this);
-    storeImageDialog.setOnDismissListener(new OnDismissListener() {
-
-      @Override
-      public void onDismiss(DialogInterface dialog) {
-        int status = storeImageDialog.getResult();
-
-        removeDiskCache(pickedRawContact);
-        thumbMemCache.remove(pickedRawContact);
-
-        switch (status) {
-        case StoreImageDialog.RESULT_SUCCESS:
-          // Toast.makeText(AssignContactPhotoActivity.this, "Voila!",
-          // Toast.LENGTH_LONG).show();
-          break;
-        case StoreImageDialog.RESULT_NO_ROOT:
-          Toast.makeText(AssignContactPhotoActivity.this,
-              getResources().getString(R.string.need_to_be_root),
-              Toast.LENGTH_LONG).show();
-          break;
-        case StoreImageDialog.RESULT_IO_ERROR:
-          Toast.makeText(AssignContactPhotoActivity.this,
-              getResources().getString(R.string.something_went_wrong),
-              Toast.LENGTH_LONG).show();
-          break;
-        default:
-          Toast.makeText(AssignContactPhotoActivity.this,
-              getResources().getString(R.string.saving_cancelled),
-              Toast.LENGTH_LONG).show();
-        }
-
-      }
-    });
-
     contactList.setOnItemClickListener(new OnItemClickListener() {
       @Override
       public void onItemClick(AdapterView<?> arg0, View view, int position,
           long id) {
+
         pickedRawContact = ((Contact) contactList.getItemAtPosition(position)).rawContactId;
         Intent intent = new Intent();
         intent.setType("image/*");
@@ -232,50 +205,72 @@ public class AssignContactPhotoActivity extends Activity {
     super.onActivityResult(requestCode, resultCode, imageReturnedIntent);
 
     switch (requestCode) {
-    case REQ_CODE_PICK_IMAGE:
+    case REQ_CODE_CROP_IMAGE:
       if (resultCode == RESULT_OK) {
-        Uri selectedImage = imageReturnedIntent.getData();
-
-        Cursor cursor = getContentResolver().query(selectedImage,
-            new String[] { Media.MIME_TYPE, Media.ORIENTATION }, null, null,
-            null);
-
-        if (cursor == null) {
-          Toast.makeText(this,
-              getResources().getString(R.string.something_went_wrong),
-              Toast.LENGTH_LONG).show();
-          return;
-        }
-
-        StoreImageParams params = new StoreImageParams();
-
-        try {
-          cursor.moveToFirst();
-
-          params.mimeType = cursor.getString(cursor
-              .getColumnIndex(Media.MIME_TYPE));
-          params.orientation = cursor.getInt(cursor
-              .getColumnIndex(Media.ORIENTATION));
-        } finally {
-          cursor.close();
-        }
-
-        if (!params.mimeType.startsWith("image/")) {
-          // XXX this is almost invisible in Holo theme (Holo.Light is fine)
-          Toast.makeText(this,
-              getResources().getString(R.string.only_image_allowed),
-              Toast.LENGTH_LONG).show();
-          return;
-        }
-
-        // Run a background job to load+crop+save the image
-
-        params.rawContactId = pickedRawContact;
-        params.uri = selectedImage;
-        params.account = account;
-        storeImageDialog.start(params);
-
+        storeImageTask = new StoreImageTask();
+        storeImageTask.execute();
+      } else {
+        cropTemp.delete();
       }
+      break;
+
+    case REQ_CODE_PICK_IMAGE:
+      if (resultCode != RESULT_OK)
+        return;
+
+      Uri selectedImage = imageReturnedIntent.getData();
+
+      Cursor cursor = getContentResolver()
+          .query(selectedImage,
+              new String[] { Media.MIME_TYPE, Media.ORIENTATION }, null, null,
+              null);
+
+      if (cursor == null) {
+        Toast.makeText(this,
+            getResources().getString(R.string.something_went_wrong),
+            Toast.LENGTH_LONG).show();
+        return;
+      }
+
+      String mimeType = "";
+
+      try {
+        cursor.moveToFirst();
+        mimeType = cursor.getString(cursor.getColumnIndex(Media.MIME_TYPE));
+      } finally {
+        cursor.close();
+      }
+
+      if (!mimeType.startsWith("image/")) {
+        Toast.makeText(this,
+            getResources().getString(R.string.only_image_allowed),
+            Toast.LENGTH_LONG).show();
+        return;
+      }
+
+      // Run crop activity
+
+      try {
+        cropTemp = File.createTempFile("croptemp-", "", getCacheDir());
+      } catch (IOException e) {
+        Toast.makeText(this,
+            getResources().getString(R.string.something_went_wrong),
+            Toast.LENGTH_LONG).show();
+        return;
+      }
+
+      Intent intent = new Intent(this, CropPhotoActivity.class);
+      intent.setData(selectedImage);
+      intent.putExtra("wratio", 1.0f);
+      intent.putExtra("hratio", 1.0f);
+      intent.putExtra("maxwidth",
+          getResources().getInteger(R.integer.config_max_photo_dim));
+      intent.putExtra("maxheight",
+          getResources().getInteger(R.integer.config_max_photo_dim));
+      // intent.putExtra("quality", 0);
+      intent.putExtra("out", Uri.fromFile(cropTemp));
+      startActivityForResult(intent, REQ_CODE_CROP_IMAGE);
+
     }
   }
 
@@ -318,6 +313,13 @@ public class AssignContactPhotoActivity extends Activity {
       break;
     }
     return super.onOptionsItemSelected(item);
+  }
+
+  @Override
+  protected void onDestroy() {
+    if (storeImageTask != null)
+      storeImageTask.cancel(true);
+    super.onDestroy();
   }
 
   @Override
@@ -783,4 +785,248 @@ public class AssignContactPhotoActivity extends Activity {
     }
 
   }
+
+  private class StoreImageTask extends AsyncTask<Void, Void, Integer> {
+
+    private static final String PHOTO_DIR = "/files/photos";
+    private static final String CONTACT_PROVIDER = "com.android.providers.contacts";
+    private static final int WAIT_TIME_DB = 5000;
+    private static final int WAIT_TIME_INT = 50;
+    public static final int RESULT_SUCCESS = 0;
+    public static final int RESULT_NO_ROOT = 1;
+    public static final int RESULT_IO_ERROR = 2;
+    public static final int RESULT_CANCELLED = 3;
+
+    private ProgressDialog dialog;
+
+    @Override
+    protected void onPreExecute() {
+      super.onPreExecute();
+      dialog = new ProgressDialog(AssignContactPhotoActivity.this);
+      dialog.setIndeterminate(true);
+      dialog.setMessage(getResources().getString(R.string.saving_in_progress));
+      dialog.setCancelable(false);
+      dialog.show();
+    }
+
+    @Override
+    protected Integer doInBackground(Void... params) {
+
+      byte[] buffer = new byte[4096];
+      int bytesRead;
+      AssetFileDescriptor fdout = null;
+      InputStream is = null;
+      OutputStream os = null;
+
+      try {
+
+        // Delete the current picture
+
+        ArrayList<ContentProviderOperation> ops = new ArrayList<ContentProviderOperation>();
+
+        ops.add(ContentProviderOperation
+            .newUpdate(
+                Data.CONTENT_URI
+                    .buildUpon()
+                    .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+                    .appendQueryParameter(RawContacts.ACCOUNT_TYPE,
+                        ACCOUNT_TYPE).build())
+            .withSelection(
+                GroupMembership.RAW_CONTACT_ID + " = " + pickedRawContact, null)
+            .withValue(Photo.PHOTO, null).build());
+
+        try {
+          getContentResolver().applyBatch(ContactsContract.AUTHORITY, ops);
+        } catch (RemoteException e1) {} catch (OperationApplicationException e1) {}
+
+        // Store the image using android API as to update its database
+
+        is = new FileInputStream(cropTemp);
+
+        Uri rawContactPhotoUri = Uri.withAppendedPath(ContentUris
+            .withAppendedId(RawContacts.CONTENT_URI, pickedRawContact),
+            RawContacts.DisplayPhoto.CONTENT_DIRECTORY);
+        fdout = getContentResolver().openAssetFileDescriptor(
+            rawContactPhotoUri, "w");
+        os = fdout.createOutputStream();
+
+        bytesRead = is.read(buffer);
+        while (bytesRead >= 0) {
+          os.write(buffer, 0, bytesRead);
+          bytesRead = is.read(buffer);
+          if (isCancelled())
+            return RESULT_CANCELLED;
+        }
+
+        os.close();
+        fdout.close();
+        is.close();
+
+        // Wait until its file ID is available
+
+        int fileId = -1;
+        Uri contactsUri = ContactsContract.Data.CONTENT_URI.buildUpon()
+            .appendQueryParameter(RawContacts.ACCOUNT_NAME, account)
+            .appendQueryParameter(RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE)
+            .build();
+
+        int retryTime = 0;
+        for (; retryTime < WAIT_TIME_DB; retryTime += WAIT_TIME_INT) {
+
+          Cursor cursor = getContentResolver().query(
+              contactsUri,
+              new String[] { Photo.PHOTO_FILE_ID,
+                  GroupMembership.RAW_CONTACT_ID },
+              GroupMembership.RAW_CONTACT_ID + " = ?",
+              new String[] { pickedRawContact + "" }, null);
+
+          try {
+            if (cursor.moveToFirst()) {
+
+              int colIndex = cursor.getColumnIndex(Photo.PHOTO_FILE_ID);
+              if (!cursor.isNull(colIndex)) {
+                fileId = cursor.getInt(colIndex);
+                break;
+              }
+            }
+          } finally {
+            cursor.close();
+          }
+
+          if (isCancelled())
+            return RESULT_CANCELLED;
+        }
+
+        if (fileId < 0)
+          return RESULT_IO_ERROR;
+
+        // Wait until the actual file is available
+
+        boolean fileAvailable = false;
+        for (; retryTime < WAIT_TIME_DB; retryTime += WAIT_TIME_INT) {
+          try {
+            fdout = getContentResolver().openAssetFileDescriptor(
+                rawContactPhotoUri, "r");
+            is = fdout.createInputStream();
+            is.close();
+            fdout.close();
+            fileAvailable = true;
+            break;
+          } catch (FileNotFoundException e) {} finally {
+            try {
+              is.close();
+            } catch (IOException e) {}
+            try {
+              fdout.close();
+            } catch (IOException e) {}
+          }
+
+          if (isCancelled())
+            return RESULT_CANCELLED;
+        }
+
+        if (!fileAvailable)
+          return RESULT_IO_ERROR;
+
+        // Atomically replace the image file
+
+        if (!rootReplaceImage(cropTemp.getAbsolutePath(), fileId))
+          return RESULT_NO_ROOT;
+
+        return RESULT_SUCCESS;
+
+      } catch (InterruptedException e) {
+        return RESULT_IO_ERROR;
+      } catch (IOException e) {
+        return RESULT_IO_ERROR;
+      } finally {
+        try {
+          if (is != null)
+            is.close();
+        } catch (IOException e) {}
+        try {
+          if (os != null)
+            os.close();
+        } catch (IOException e) {}
+        try {
+          if (fdout != null)
+            fdout.close();
+        } catch (IOException e) {}
+      }
+    }
+
+    private boolean rootReplaceImage(String src, int fileId)
+        throws InterruptedException, IOException {
+
+      int uid;
+      String dstDir;
+      try {
+        PackageManager pm = getPackageManager();
+        PackageInfo pi = pm.getPackageInfo(CONTACT_PROVIDER, 0);
+        uid = pi.applicationInfo.uid;
+        dstDir = pi.applicationInfo.dataDir + PHOTO_DIR;
+      } catch (NameNotFoundException e) {
+        return false;
+      }
+
+      // Find the PID of contact provider
+
+      String killCommand = "";
+      ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+      for (RunningAppProcessInfo proc : am.getRunningAppProcesses())
+        for (String p : proc.pkgList)
+          if (CONTACT_PROVIDER.equals(p)) {
+            killCommand = "kill " + proc.pid + "\n";
+            break;
+          }
+
+      // Modify the permission of our tmp file and move it over to the correct
+      // location + restart contact storage service
+
+      if (!Util.runRoot("chown " + uid + ":" + uid + " " + src + "\nchmod 600 "
+          + src + "\nmv " + src + " " + dstDir + "/" + fileId + "\n"
+          + killCommand))
+        return false;
+
+      return true;
+
+    }
+
+    @Override
+    protected void onPostExecute(Integer result) {
+      try {
+        dialog.dismiss();
+      } catch (Exception e) {}
+      switch (result) {
+      case RESULT_SUCCESS:
+        break;
+      case RESULT_NO_ROOT:
+        Toast.makeText(AssignContactPhotoActivity.this,
+            getResources().getString(R.string.need_to_be_root),
+            Toast.LENGTH_LONG).show();
+        break;
+      case RESULT_IO_ERROR:
+        Toast.makeText(AssignContactPhotoActivity.this,
+            getResources().getString(R.string.something_went_wrong),
+            Toast.LENGTH_LONG).show();
+        break;
+      }
+      removeDiskCache(pickedRawContact);
+      thumbMemCache.remove(pickedRawContact);
+    }
+
+    @Override
+    protected void onCancelled() {
+      try {
+        dialog.cancel();
+      } catch (Exception e) {}
+      Toast.makeText(AssignContactPhotoActivity.this,
+          getResources().getString(R.string.saving_cancelled),
+          Toast.LENGTH_LONG).show();
+      removeDiskCache(pickedRawContact);
+      thumbMemCache.remove(pickedRawContact);
+    }
+
+  }
+
 }

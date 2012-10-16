@@ -1,22 +1,32 @@
 package com.oxplot.contactphotosync;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
 import android.app.Activity;
+import android.app.ProgressDialog;
+import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.graphics.Bitmap;
+import android.graphics.Bitmap.CompressFormat;
+import android.graphics.Bitmap.Config;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapFactory.Options;
+import android.graphics.BitmapRegionDecoder;
+import android.graphics.Canvas;
 import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Display;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -26,12 +36,20 @@ import android.widget.Toast;
 
 public class CropPhotoActivity extends Activity {
 
+  private static final String TAG = "CropPhoto";
+
   private boolean loaded = false;
   private ProgressBar loadingBar;
   private CropView cropView;
   private PrepareTask preparer;
+  private CropTask cropper;
   private File inCachePath;
   private int orientation;
+  private Uri outUri;
+  private int jpegQuality;
+  private int maxWidth;
+  private int maxHeight;
+  private String mimeType;
 
   @Override
   public void onCreate(Bundle savedState) {
@@ -44,7 +62,12 @@ public class CropPhotoActivity extends Activity {
       loaded = true;
 
     if (loaded) {
+      mimeType = savedState.getString("mimetype");
       RectF bound = new RectF();
+      jpegQuality = savedState.getInt("quality");
+      outUri = (Uri) savedState.getParcelable("out");
+      maxWidth = savedState.getInt("max_width");
+      maxHeight = savedState.getInt("max_height");
       cropView.setEnforceRatio(savedState.getBoolean("enforce_ratio"));
       cropView.setCropWRatio(savedState.getFloat("wratio"));
       cropView.setCropHRatio(savedState.getFloat("hratio"));
@@ -69,6 +92,8 @@ public class CropPhotoActivity extends Activity {
   protected void onDestroy() {
     if (preparer != null)
       preparer.cancel(true);
+    if (cropper != null)
+      cropper.cancel(true);
     super.onDestroy();
   }
 
@@ -108,6 +133,11 @@ public class CropPhotoActivity extends Activity {
     outState.putFloat("wratio", cropView.getCropWRatio());
     outState.putFloat("hratio", cropView.getCropHRatio());
     outState.putBoolean("enforce_ratio", cropView.isEnforceRatio());
+    outState.putInt("max_width", maxWidth);
+    outState.putInt("max_height", maxHeight);
+    outState.putInt("quality", jpegQuality);
+    outState.putParcelable("out", outUri);
+    outState.putString("mimetype", mimeType);
   }
 
   @Override
@@ -119,7 +149,8 @@ public class CropPhotoActivity extends Activity {
   public boolean onMenuItemSelected(int featureId, MenuItem item) {
     switch (item.getItemId()) {
     case R.id.menu_crop:
-      // TODO
+      cropper = new CropTask();
+      cropper.execute();
       break;
     case R.id.menu_cancel_crop:
       goodbye(RESULT_CANCELED);
@@ -138,6 +169,7 @@ public class CropPhotoActivity extends Activity {
     private File inCachePath;
     private Bitmap thumbnail;
     private int orgWidth, orgHeight, orientation;
+    private String mimeType;
 
     public PrepareTask() {
       src = getIntent().getData();
@@ -188,6 +220,9 @@ public class CropPhotoActivity extends Activity {
           return FAILED;
         orgWidth = opts.outWidth;
         orgHeight = opts.outHeight;
+        mimeType = opts.outMimeType;
+        if (!"image/jpeg".equals(mimeType) && !"image/png".equals(mimeType))
+          return FAILED;
 
         // For JPEG files, read the orientation details
 
@@ -276,9 +311,19 @@ public class CropPhotoActivity extends Activity {
     @Override
     protected void onPostExecute(Integer result) {
       if (result == OK) {
-        cropView.setEnforceRatio(true);
-        cropView.setCropHRatio(1);
-        cropView.setCropWRatio(1);
+        CropPhotoActivity.this.mimeType = mimeType;
+        Intent it = getIntent();
+        maxWidth = it.getIntExtra("maxwidth",
+            getResources().getInteger(R.integer.config_max_photo_dim));
+        maxHeight = it.getIntExtra("maxheight",
+            getResources().getInteger(R.integer.config_max_photo_dim));
+        jpegQuality = it.getIntExtra("quality",
+            getResources().getInteger(R.integer.config_default_jpeg_quality));
+        outUri = (Uri) it.getParcelableExtra("out");
+        cropView
+            .setEnforceRatio(it.hasExtra("wratio") && it.hasExtra("hratio"));
+        cropView.setCropWRatio(it.getFloatExtra("wratio", 1));
+        cropView.setCropHRatio(it.getFloatExtra("hratio", 1));
         cropView.setThumbnail(thumbnail);
         CropPhotoActivity.this.orientation = orientation;
         cropView.setOrgWidth(orgWidth);
@@ -301,5 +346,176 @@ public class CropPhotoActivity extends Activity {
       }
     }
 
+  }
+
+  private class CropTask extends AsyncTask<Void, Void, Integer> {
+
+    private static final int REGION_SIZE = 256;
+    private static final int OK = 0;
+    private static final int FAILED = 1;
+    private ProgressDialog dialog;
+    private RectF bounds;
+    private int orgOutWidth;
+    private int orgOutHeight;
+
+    @Override
+    protected void onPreExecute() {
+      dialog = new ProgressDialog(CropPhotoActivity.this);
+      dialog.setIndeterminate(true);
+      dialog.setMessage("Cropping in progress");
+      dialog.setCancelable(false);
+      dialog.show();
+      bounds = cropView.getCropBound();
+      orgOutWidth = orientation % 180 == 0 ? cropView.getOrgWidth() : cropView
+          .getOrgHeight();
+      orgOutHeight = orientation % 180 == 0 ? cropView.getOrgHeight()
+          : cropView.getOrgWidth();
+    }
+
+    @Override
+    protected Integer doInBackground(Void... arg0) {
+
+      Matrix m = new Matrix();
+
+      float finalScale = 1;
+      if (bounds.right - bounds.left > maxWidth)
+        finalScale = (float) maxWidth / (bounds.right - bounds.left);
+      if (finalScale * (bounds.bottom - bounds.top) > maxHeight)
+        finalScale = (float) maxHeight / (bounds.bottom - bounds.top);
+      int outImgW = (int) Math.round(finalScale * (bounds.right - bounds.left));
+      int outImgH = (int) Math.round(finalScale * (bounds.bottom - bounds.top));
+
+      int inImgW = (int) Math.round(orientation % 180 == 0 ? Math
+          .abs(bounds.left - bounds.right) : Math.abs(bounds.top
+          - bounds.bottom));
+      int inImgH = (int) Math.round(orientation % 180 == 0 ? Math
+          .abs(bounds.top - bounds.bottom) : Math.abs(bounds.left
+          - bounds.right));
+      int inImgX = (int) Math.round(bounds.left);
+      int inImgY = (int) Math.round(bounds.top);
+      switch (orientation) {
+      case 90:
+        inImgX = (int) Math.round(bounds.top);
+        inImgY = (int) Math.round(orgOutWidth - bounds.right);
+        m.preTranslate(finalScale * outImgW, 0);
+        break;
+      case 180:
+        inImgX = (int) Math.round(orgOutWidth - bounds.right);
+        inImgY = (int) Math.round(orgOutHeight - bounds.bottom);
+        m.preTranslate(finalScale * outImgW, finalScale * outImgH);
+        break;
+      case 270:
+        inImgX = (int) Math.round(orgOutHeight - bounds.bottom);
+        inImgY = (int) Math.round(bounds.left);
+        m.preTranslate(0, finalScale * outImgH);
+        break;
+      }
+
+      m.preRotate(orientation);
+      m.preScale(finalScale, finalScale);
+
+      AssetFileDescriptor fdout = null, fdin = null;
+      InputStream is = null;
+      OutputStream os = null;
+
+      try {
+        // Decide if we need to actually do a crop
+
+        if (orientation == 0 && "image/jpeg".equals(mimeType)
+            && orgOutWidth == outImgW && orgOutHeight == outImgH) {
+          fdout = getContentResolver().openAssetFileDescriptor(outUri, "w");
+          is = new FileInputStream(inCachePath);
+          os = fdout.createOutputStream();
+
+          byte[] buffer = new byte[4096];
+          int bytesRead = is.read(buffer);
+          while (bytesRead >= 0) {
+            os.write(buffer, 0, bytesRead);
+            bytesRead = is.read(buffer);
+          }
+
+          is.close();
+          os.close();
+          fdout.close();
+
+          Log.i(TAG, "Took a shortcut and didn't crop");
+
+        } else {
+
+          Options opts = new Options();
+          opts.inPreferQualityOverSpeed = true;
+          Rect regionBound = new Rect();
+          BitmapRegionDecoder regionDecoder = BitmapRegionDecoder.newInstance(
+              inCachePath.getAbsolutePath(), true);
+          Bitmap outBitmap = Bitmap.createBitmap(outImgW, outImgH,
+              Config.ARGB_8888);
+          Canvas canvas = new Canvas(outBitmap);
+          Paint paint = new Paint();
+          paint.setFilterBitmap(true);
+          canvas.setMatrix(m);
+          for (int x = 0; x < inImgW; x += REGION_SIZE) {
+            for (int y = 0; y < inImgH; y += REGION_SIZE) {
+              regionBound.left = inImgX + x;
+              regionBound.top = inImgY + y;
+              regionBound.right = inImgX + Math.min(x + REGION_SIZE, inImgW);
+              regionBound.bottom = inImgY + Math.min(y + REGION_SIZE, inImgH);
+              Bitmap region = regionDecoder.decodeRegion(regionBound, opts);
+              canvas.drawBitmap(region, x, y, paint);
+              if (isCancelled())
+                return FAILED;
+            }
+          }
+          fdout = getContentResolver().openAssetFileDescriptor(outUri, "w");
+          os = fdout.createOutputStream();
+          outBitmap.compress(CompressFormat.JPEG, jpegQuality, os);
+          os.close();
+          fdout.close();
+        }
+
+      } catch (IOException e) {
+        return FAILED;
+      } finally {
+        if (os != null)
+          try {
+            os.close();
+          } catch (IOException e) {}
+        if (is != null)
+          try {
+            is.close();
+          } catch (IOException e) {}
+        if (fdout != null)
+          try {
+            fdout.close();
+          } catch (IOException e) {}
+        if (fdin != null)
+          try {
+            fdin.close();
+          } catch (IOException e) {}
+      }
+
+      return OK;
+    }
+
+    @Override
+    protected void onCancelled() {
+      try {
+        dialog.cancel();
+      } catch (Exception e) {}
+    }
+
+    @Override
+    protected void onPostExecute(Integer result) {
+      try {
+        dialog.dismiss();
+      } catch (Exception e) {}
+      if (result == OK) {
+        goodbye(RESULT_OK);
+      } else {
+        Toast.makeText(CropPhotoActivity.this,
+            getResources().getString(R.string.something_went_wrong),
+            Toast.LENGTH_LONG).show();
+        goodbye(RESULT_CANCELED);
+      }
+    }
   }
 }

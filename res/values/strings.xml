@@ -17,7 +17,6 @@
     <string name="menu_cancel_crop">Cancel crop</string>
     <string name="provider_name">Contact Photos</string>
     <string name="picasa_album_title">Android Contact Photos</string>
-    <string name="picasa_album_summary">Backup of your high quality android contact photos that can be later synced back to your phone when needed.</string>
     <string name="no_google_accounts">You have no Google accounts configured.\nGo to Settings > Accounts to add one.</string>
     <string name="no_contacts">No contacts to show</string>
     <string name="need_to_be_root">Root access is required to save high resolution photo</string>
@@ -35,5 +34,6 @@
     <string name="contacts">contacts</string>
     <string name="removing_photos">Removing photos</string>
     <string name="removed_photos">%0$s photos removed</string>
+    <string name="picasaweb_readme">Here are contact photos from your Android phone uploaded by Contact Photo Sync app (http://goo.gl/R581Z). You can upload photos to this album yourself but for them to sync to your phone, they must be JPEG format, perfectly square and no larger than %0$dx%0$d.</string>
 
 </resources>
