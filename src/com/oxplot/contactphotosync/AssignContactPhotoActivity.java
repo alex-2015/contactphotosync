@@ -100,7 +100,8 @@ public class AssignContactPhotoActivity extends Activity {
   private static final String MY_CONTACTS_GROUP = "6";
   private static final String DISK_CACHE_DIR = "thumbcache";
   private static final String ACCOUNT_TYPE = "com.google";
-  private static final String CONTENT_AUTHORITY = "com.oxplot.contactphotos";
+  private static final String CONTACT_PHOTO_AUTHORITY = "com.oxplot.contactphotos";
+  private static final String CONTACTS_AUTHORITY = "com.android.contacts";
 
   private Drawable unchangedThumb;
   private String account;
@@ -113,6 +114,8 @@ public class AssignContactPhotoActivity extends Activity {
   private Drawable defaultThumb;
   private int pickedRawContact;
   private StoreImageTask storeImageTask;
+  private boolean contactsSyncAuto;
+  private boolean contactPhotoSyncAuto;
 
   private int thumbSize;
   private File cropTemp;
@@ -166,7 +169,7 @@ public class AssignContactPhotoActivity extends Activity {
     });
 
   }
-  
+
   private void putToThumbMemCache(int id, Drawable d) {
     // XXX very naive way of doing this
     if (thumbMemCache.size() >= THUMB_MEM_CACHE_LIMIT)
@@ -304,8 +307,8 @@ public class AssignContactPhotoActivity extends Activity {
       return true;
     case R.id.menu_sync_now:
       Account a = new Account(account, ACCOUNT_TYPE);
-      ContentResolver.setSyncAutomatically(a, CONTENT_AUTHORITY, true);
-      ContentResolver.requestSync(a, CONTENT_AUTHORITY, new Bundle());
+      ContentResolver.setSyncAutomatically(a, CONTACT_PHOTO_AUTHORITY, true);
+      ContentResolver.requestSync(a, CONTACT_PHOTO_AUTHORITY, new Bundle());
       Toast.makeText(this, getResources().getString(R.string.sync_requested),
           Toast.LENGTH_LONG).show();
       break;
@@ -334,6 +337,14 @@ public class AssignContactPhotoActivity extends Activity {
 
   @Override
   protected void onPause() {
+    // XXX experimentally, we're gonna disable contacts sync so it doesn't
+    // interfere with our evil root plans - and here we restore it
+    // Account a = new Account(account, ACCOUNT_TYPE);
+    // ContentResolver.setSyncAutomatically(a, CONTACTS_AUTHORITY,
+    // contactsSyncAuto);
+    // ContentResolver.setSyncAutomatically(a, CONTACT_PHOTO_AUTHORITY,
+    // contactPhotoSyncAuto);
+
     thumbMemCache.clear();
     if (contactsLoader != null)
       contactsLoader.cancel(false);
@@ -348,6 +359,15 @@ public class AssignContactPhotoActivity extends Activity {
     super.onResume();
     contactsLoader = new LoadContactsTask();
     contactsLoader.execute(account);
+    // XXX experimentally, we're gonna disable contacts sync so it doesn't
+    // interfere with our evil root plans
+    // Account a = new Account(account, ACCOUNT_TYPE);
+    // contactsSyncAuto = ContentResolver.getSyncAutomatically(a,
+    // CONTACTS_AUTHORITY);
+    // contactPhotoSyncAuto = ContentResolver.getSyncAutomatically(a,
+    // CONTACT_PHOTO_AUTHORITY);
+    // ContentResolver.setSyncAutomatically(a, CONTACTS_AUTHORITY, false);
+    // ContentResolver.setSyncAutomatically(a, CONTACT_PHOTO_AUTHORITY, false);
   }
 
   private class LoadThumbTask extends AsyncTask<Integer, Void, Drawable> {

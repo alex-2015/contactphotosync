@@ -515,6 +515,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       serverEntries.put(picked.title, picked);
       return picked;
     }
+    if (contact.displayName == null)
+      return null;
     // XXX the worst way of doing this, need a hashtable or something
     String contactName = contact.displayName.trim().toLowerCase();
     for (PicasaPhoto p : serverEntries.values()) {
