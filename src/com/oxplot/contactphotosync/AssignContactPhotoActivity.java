@@ -90,41 +90,169 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+/**
+ * Provides a similar interface to android contacts app allowing user to assign
+ * photos to contacts. The reason for re-implementing this UI is to work around
+ * the android API which limits certain aspects of dimension and quality of the
+ * saved photo. In our app with root access, we can save any image file we wish
+ * as contact a photo.
+ */
 public class AssignContactPhotoActivity extends Activity {
 
+  /**
+   * Debugging tag
+   */
   private static final String TAG = "AssignContactPhoto";
+
+  /**
+   * JPEG quality of thumbnails saved to app's disk cache.
+   */
+  private static final int THUMB_QUALITY = 90;
+
+  /**
+   * Request code for starting activity to pick an image file.
+   */
   private static final int REQ_CODE_PICK_IMAGE = 88;
+
+  /**
+   * Request code for starting the crop activity.
+   */
   private static final int REQ_CODE_CROP_IMAGE = 99;
+
+  /**
+   * Maximum number of thumbnails kept in memory cache above which the cache is
+   * completely flushed.
+   */
   private static final int THUMB_MEM_CACHE_LIMIT = 100;
 
+  /**
+   * Gmail group id for "My Contacts" group which contains all the contacts that
+   * have been specifically added by the user as opposed to those that are
+   * automatically added by Gmail.
+   */
   private static final String MY_CONTACTS_GROUP = "6";
+
+  /**
+   * Directory name under application's cache directory for storing contact
+   * thumbnails. The thumbnails are used to speed up the viewing of contact
+   * photos once the app is first resumed.
+   */
   private static final String DISK_CACHE_DIR = "thumbcache";
+
+  /**
+   * Google account type.
+   */
   private static final String ACCOUNT_TYPE = "com.google";
+
+  /**
+   * Contact photo data authority. It is used here to enable sync for our app
+   * through the UI.
+   */
   private static final String CONTACT_PHOTO_AUTHORITY = "com.oxplot.contactphotos";
+
+  /**
+   * Contact data authority. It is used here to disable contact sync while the
+   * UI is running to prevent contact sync which may be interrupted by the
+   * repetitive killing of Contacts Provider.
+   */
   private static final String CONTACTS_AUTHORITY = "com.android.contacts";
 
+  /**
+   * Placeholder used to indicate that thumbnail for a contact is not modified
+   * and hence should not be updated on the UI.
+   */
   private Drawable unchangedThumb;
+
+  /**
+   * Account name (aka email address) of the Google account for which the
+   * contacts are shown.
+   */
   private String account;
+
+  /**
+   * Main UI list element on the screen.
+   */
   private ListView contactList;
+
+  /**
+   * A text message shown when there are no contacts for the current account.
+   */
   private TextView emptyList;
+
+  /**
+   * Progress bar shown while contacts are loading.
+   */
   private ProgressBar loadingProgress;
+
+  /**
+   * Task that loads list of contacts for the current account.
+   */
   private LoadContactsTask contactsLoader;
+
+  /**
+   * In memory cache of thumbnails used to speed up rendering contact photos in
+   * the list.
+   */
   private SparseArray<Drawable> thumbMemCache;
+
+  /**
+   * Async tasks currently running (mostly thumbnails retrievers).
+   */
   private Set<AsyncTask<?, ?, ?>> asyncTasks;
+
+  /**
+   * The default thumbnail for when a contact is lacking a photo.
+   */
   private Drawable defaultThumb;
+
+  /**
+   * Raw contact ID of a contact for which a new photo is being picked. This is
+   * set after a contact is selected and is used in StoreImageTask after
+   * CropPhotoActivity has successfully finished.
+   */
   private int pickedRawContact;
+
+  /**
+   * Saves the photo that has been cropped by CropPhotoActivity as contact
+   * photo.
+   */
   private StoreImageTask storeImageTask;
+
+  /**
+   * Indicates if Google contact sync was ticked in preferences prior to
+   * resumption of this activity.
+   */
   private boolean contactsSyncAuto;
+
+  /**
+   * Indicates if Google contact photo sync was ticked in preferences prior to
+   * resumption of this activity.
+   */
   private boolean contactPhotoSyncAuto;
 
+  /**
+   * Width and height of a thumbnail.
+   */
   private int thumbSize;
+
+  /**
+   * Temporary location for saving cropped photos. This location is turned into
+   * a URI and passed to CropPhotoActivity.
+   */
   private File cropTemp;
 
   @Override
-  public void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
+  public void onCreate(Bundle savedState) {
+    super.onCreate(savedState);
 
     thumbSize = getResources().getInteger(R.integer.config_list_thumb_size);
+
+    if (savedState != null) {
+      String cropTempPath = savedState.getString("crop_temp");
+      if (cropTempPath != null)
+        cropTemp = new File(cropTempPath);
+      pickedRawContact = savedState.getInt("picked_raw_contact", 0);
+    }
 
     // Initialize cache directory
 
@@ -160,9 +288,16 @@ public class AssignContactPhotoActivity extends Activity {
 
         pickedRawContact = ((Contact) contactList.getItemAtPosition(position)).rawContactId;
         Intent intent = new Intent();
+
+        // We only really accept PNG and JPEG but the activities registered for
+        // the intended action only accept the generic form of the mime type. We
+        // will check for our constraints after the image is picked.
+
         intent.setType("image/*");
         intent.setAction(Intent.ACTION_GET_CONTENT);
-        startActivityForResult(Intent.createChooser(intent, "Select Picture"),
+        startActivityForResult(
+            Intent.createChooser(intent,
+                getResources().getString(R.string.select_picture)),
             REQ_CODE_PICK_IMAGE);
 
       }
@@ -170,6 +305,25 @@ public class AssignContactPhotoActivity extends Activity {
 
   }
 
+  @Override
+  protected void onSaveInstanceState(Bundle outState) {
+    super.onSaveInstanceState(outState);
+    if (cropTemp != null)
+      outState.putString("crop_temp", cropTemp.getAbsolutePath());
+    outState.putInt("picked_raw_contact", pickedRawContact);
+  }
+
+  /**
+   * Stores the given {@link Drawable} for raw contact with <code>id</code> to
+   * in-memory cache. If the cache is already full (ie
+   * {@link THUMB_MEM_CACHE_LIMIT} number of elements or more), the cache is
+   * flushed completely and <code>d</code> added.
+   * 
+   * @param id
+   *          Raw contact Id
+   * @param d
+   *          Thumbnail to store
+   */
   private void putToThumbMemCache(int id, Drawable d) {
     // XXX very naive way of doing this
     if (thumbMemCache.size() >= THUMB_MEM_CACHE_LIMIT)
@@ -177,16 +331,31 @@ public class AssignContactPhotoActivity extends Activity {
     thumbMemCache.put(id, d);
   }
 
+  /**
+   * Removes a thumbnail from disk cache.
+   * 
+   * @param id
+   *          Raw contact Id
+   */
   private void removeDiskCache(int id) {
     new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id).delete();
   }
 
+  /**
+   * Stores <code>bitmap</code> as thumbnail for the given contact with raw
+   * contact <code>id</code> in app's disk cache.
+   * 
+   * @param id
+   *          Raw contact id.
+   * @param bitmap
+   *          Thumbnail
+   */
   private void writeDiskCache(int id, Bitmap bitmap) {
     File file = new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id);
     FileOutputStream stream = null;
     try {
       stream = new FileOutputStream(file);
-      bitmap.compress(CompressFormat.JPEG, 90, stream);
+      bitmap.compress(CompressFormat.JPEG, THUMB_QUALITY, stream);
     } catch (IOException e) {
       e.printStackTrace();
     } finally {
@@ -197,6 +366,14 @@ public class AssignContactPhotoActivity extends Activity {
     }
   }
 
+  /**
+   * Loads thumbnail from disk cache for the given contact.
+   * 
+   * @param id
+   *          Raw contact Id
+   * @return Thumbnail otherwise <code>null</code> if no thumbnail exists for
+   *         the contact or if an error occurs while loading.
+   */
   private Bitmap readDiskCache(int id) {
     File file = new File(new File(getCacheDir(), DISK_CACHE_DIR), "" + id);
     FileInputStream stream = null;
@@ -219,6 +396,10 @@ public class AssignContactPhotoActivity extends Activity {
 
     switch (requestCode) {
     case REQ_CODE_CROP_IMAGE:
+
+      // The photo is cropped. Kick off the store image task to save it to the
+      // appropriate contact.
+
       if (resultCode == RESULT_OK) {
         storeImageTask = new StoreImageTask();
         storeImageTask.execute();
@@ -228,15 +409,16 @@ public class AssignContactPhotoActivity extends Activity {
       break;
 
     case REQ_CODE_PICK_IMAGE:
+
       if (resultCode != RESULT_OK)
         return;
 
+      // The image is picked by the user. Query its MIME type.
+
       Uri selectedImage = imageReturnedIntent.getData();
 
-      Cursor cursor = getContentResolver()
-          .query(selectedImage,
-              new String[] { Media.MIME_TYPE, Media.ORIENTATION }, null, null,
-              null);
+      Cursor cursor = getContentResolver().query(selectedImage,
+          new String[] { Media.MIME_TYPE }, null, null, null);
 
       if (cursor == null) {
         Toast.makeText(this,
@@ -254,14 +436,17 @@ public class AssignContactPhotoActivity extends Activity {
         cursor.close();
       }
 
-      if (!mimeType.startsWith("image/")) {
+      // Currently, we only accept PNG and JPEG images. Puke on anything else.
+
+      if (!"image/jpeg".equals(mimeType) && !"image/png".equals(mimeType)) {
         Toast.makeText(this,
             getResources().getString(R.string.only_image_allowed),
             Toast.LENGTH_LONG).show();
         return;
       }
 
-      // Run crop activity
+      // Create a temporary file to pass to CropPhotoActivity for saving the
+      // cropped photo.
 
       try {
         cropTemp = File.createTempFile("croptemp-", "", getCacheDir());
@@ -271,6 +456,8 @@ public class AssignContactPhotoActivity extends Activity {
             Toast.LENGTH_LONG).show();
         return;
       }
+
+      // Fire up the cropper.
 
       Intent intent = new Intent(this, CropPhotoActivity.class);
       intent.setData(selectedImage);
@@ -297,6 +484,7 @@ public class AssignContactPhotoActivity extends Activity {
   @Override
   public boolean onMenuItemSelected(int featureId, MenuItem item) {
     switch (item.getItemId()) {
+
     case android.R.id.home:
       Intent upIntent = new Intent(this, SelectAccountActivity.class);
       if (NavUtils.shouldUpRecreateTask(this, upIntent)) {
@@ -305,13 +493,19 @@ public class AssignContactPhotoActivity extends Activity {
         NavUtils.navigateUpTo(this, upIntent);
       }
       return true;
+
     case R.id.menu_sync_now:
+
+      // This is a convenient way of enabling and running the contact photo
+      // sync.
+
       Account a = new Account(account, ACCOUNT_TYPE);
       ContentResolver.setSyncAutomatically(a, CONTACT_PHOTO_AUTHORITY, true);
       ContentResolver.requestSync(a, CONTACT_PHOTO_AUTHORITY, new Bundle());
       Toast.makeText(this, getResources().getString(R.string.sync_requested),
           Toast.LENGTH_LONG).show();
       break;
+
     case R.id.menu_download_all:
     case R.id.menu_upload_all:
       new DownloadUploadTask(
@@ -320,7 +514,12 @@ public class AssignContactPhotoActivity extends Activity {
           .execute(((ContactAdapter) contactList.getAdapter()).getBackingList());
 
       break;
+
     case R.id.menu_refresh:
+
+      // XXX This is ugly and hackish. This of course doesn't stop us from being
+      // lazy and using it here.
+
       onPause();
       onResume();
       break;
@@ -337,6 +536,7 @@ public class AssignContactPhotoActivity extends Activity {
 
   @Override
   protected void onPause() {
+
     // XXX experimentally, we're gonna disable contacts sync so it doesn't
     // interfere with our evil root plans - and here we restore it
     // Account a = new Account(account, ACCOUNT_TYPE);
@@ -356,9 +556,11 @@ public class AssignContactPhotoActivity extends Activity {
 
   @Override
   protected void onResume() {
+
     super.onResume();
     contactsLoader = new LoadContactsTask();
     contactsLoader.execute(account);
+
     // XXX experimentally, we're gonna disable contacts sync so it doesn't
     // interfere with our evil root plans
     // Account a = new Account(account, ACCOUNT_TYPE);
@@ -370,8 +572,14 @@ public class AssignContactPhotoActivity extends Activity {
     // ContentResolver.setSyncAutomatically(a, CONTACT_PHOTO_AUTHORITY, false);
   }
 
+  /**
+   * Loads a single thumbnail on a background thread.
+   */
   private class LoadThumbTask extends AsyncTask<Integer, Void, Drawable> {
 
+    /**
+     * Raw contact ID of the contact to load the thumbnail for.
+     */
     private int rawContactId;
 
     @Override

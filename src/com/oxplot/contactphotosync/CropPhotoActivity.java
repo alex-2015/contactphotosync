@@ -343,7 +343,8 @@ public class CropPhotoActivity extends Activity {
         cropView.setCropBound(bound);
         loaded = true;
         initAfterLoad();
-        menu.findItem(R.id.menu_crop).setVisible(true);
+        if (menu != null)
+          menu.findItem(R.id.menu_crop).setVisible(true);
       } else {
         Toast.makeText(CropPhotoActivity.this,
             getResources().getString(R.string.something_went_wrong),
