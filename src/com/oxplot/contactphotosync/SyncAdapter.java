@@ -397,13 +397,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
       }
       if (!picasaReadmeText.equals(readmeEntry.summary)) {
         Log.d(TAG, "Readme photo has wrong summary.");
-        PicasaPhoto readmePhoto = album.createPhoto();
-        readmePhoto.title = README_TITLE;
-        readmePhoto.summary = picasaReadmeText;
+        readmeEntry.title = README_TITLE;
+        readmeEntry.summary = picasaReadmeText;
         InputStream is = getContext().getResources().openRawResource(
             R.drawable.readme);
-        readmePhoto.setPhotoStream(is);
-        readmePhoto.save();
+        readmeEntry.setPhotoStream(is);
+        readmeEntry.save();
         is.close();
       }
 

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="title_activity_assign_contact_photo">Добавить фото к контакту</string>
+    <string name="title_activity_select_account">Выбрать аккаунт</string>
+    <string name="title_activity_crop_photo">Обрезать фото</string>
+    <string name="menu_settings">Настройки</string>
+    <string name="menu_sync_now">Синхронизировать</string>
+    <string name="menu_refresh">Обновить</string>
+    <string name="menu_upload_all">Загрузить все</string>
+    <string name="menu_download_all">Скачать все</string>
+    <string name="menu_remove_photo">Удалить фото</string>
+    <string name="menu_upload_photo">Загрузить фото</string>
+    <string name="menu_download_photo">Скачать фото</string>
+    <string name="menu_crop">Обрезать</string>
+    <string name="menu_cancel_crop">Отменить обрезание</string>
+    <string name="provider_name">Фото контактов</string>
+    <string name="no_google_accounts">У Вас не настроено ни одного аккаунта Google.\nВыберите Настройки > Аккаунты, чтобы добавить новый.</string>
+    <string name="no_contacts">Нет контактов</string>
+    <string name="need_to_be_root">Для сохранения фото в HD нужен Root-доступ</string>
+    <string name="something_went_wrong">УПС! Что-то пошло не так!</string>
+    <string name="saving_cancelled">Сохранение фото отменено</string>
+    <string name="only_image_allowed">Только JPEG и PNG изображения</string>
+    <string name="saving_in_progress">Сохраняю</string>
+    <string name="sync_requested">Синхронизация включена и запрошена</string>
+    <string name="queuing_for_download">Очередь скачивание</string>
+    <string name="queuing_for_upload">Очередь загрузки</string>
+    <string name="queued_for_download">%0$s фото в очереди скачивания при следующей синхронизации</string>
+    <string name="queued_for_upload">%0$s фото в очереди загрузки при следующей синхронизации</string>
+    <string name="selected">выбранный</string>
+    <string name="contact">контакт</string>
+    <string name="contacts">контакты</string>
+    <string name="removing_photos">Удаляем фото</string>
+    <string name="removed_photos">%0$s фото удалено</string>
+    <string name="picasaweb_readme">Фото ваших контактов из Android-устройства, загруженные приложением Contact Photo Sync (http://goo.gl/R581Z). Вы можете загрузить фото в альбом самостоятельно. Требования для фото: JPEG-формат, квадратные, размером не более %0$dx%0$d и быть одноименным с синхронизируемым контактом.</string>
+    <string name="select_picture">Выберите фото</string>
+
+</resources>
