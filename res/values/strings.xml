@@ -1,13 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Language indpenedent strings -->
-
     <string name="app_name">Contact Photo Sync</string>
     <string name="picasa_album_title">Android Contact Photos</string>
-
-    <!-- Language dependent strings -->
-
     <string name="title_activity_assign_contact_photo">Assign Contact Photo</string>
     <string name="title_activity_select_account">Select Account</string>
     <string name="title_activity_crop_photo">Crop Photo</string>
