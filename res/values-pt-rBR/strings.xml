@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">Contact Photo Sync</string>
+    <string name="picasa_album_title">Android Contact Photos</string>
+    <string name="title_activity_assign_contact_photo">Atribuir Foto ao Contato</string>
+    <string name="title_activity_select_account">Selecionar Conta</string>
+    <string name="title_activity_crop_photo">Cortar Foto</string>
+    <string name="menu_settings">Configurações</string>
+    <string name="menu_sync_now">Sincronizar agora</string>
+    <string name="menu_refresh">Atualizar</string>
+    <string name="menu_upload_all">Enviar todas</string>
+    <string name="menu_download_all">Baixar todas</string>
+    <string name="menu_remove_photo">Remover foto</string>
+    <string name="menu_upload_photo">Enviar foto</string>
+    <string name="menu_download_photo">Baixar foto</string>
+    <string name="menu_crop">Cortar</string>
+    <string name="menu_cancel_crop">Cancelar corte</string>
+    <string name="provider_name">Fotos dos Contatos</string>
+    <string name="no_google_accounts">Você não tem nenhuma conta do Google configurada.\nVá em Configurações > Contas e sincronização para adicionar uma.</string>
+    <string name="no_contacts">Nenhum contato para exibir</string>
+    <string name="need_to_be_root">Acesso root é necessário para salvar foto em alta resolução</string>
+    <string name="something_went_wrong">UH OH! Algo saiu errado!</string>
+    <string name="saving_cancelled">Cancelando salvar foto</string>
+    <string name="only_image_allowed">Somente imagens JPEG e PNG podem ser utilizadas</string>
+    <string name="saving_in_progress">Salvando</string>
+    <string name="sync_requested">Sincronização ativada e solicitada</string>
+    <string name="queuing_for_download">Em fila de espera para baixar</string>
+    <string name="queuing_for_upload">Em fila de espera para enviar</string>
+    <string name="queued_for_download">%0$s em fila de espera para baixar na próxima sincronização</string>
+    <string name="queued_for_upload">%0$s em fila de espera para enviar na próxima sincronização</string>
+    <string name="selected">selecionado</string>
+    <string name="contact">contato</string>
+    <string name="contacts">contatos</string>
+    <string name="removing_photos">Removendo fotos</string>
+    <string name="removed_photos">%0$s fotos removidas</string>
+    <string name="picasaweb_readme">Aqui estão as fotos dos contatos do seu telefone Android enviados pelo aplicativo Contact Photo Sync (http://goo.gl/R581Z). Você mesmo pode enviar fotos para o álbum, mas para elas sincronizarem com seu telefone, elas devem estar no formato JPEG, perfeitamente quadrada, não maior do que %0$dx%0$d e ter o nome do contato como legenda.</string>
+    <string name="select_picture">Selecionar Imagem</string>
+
+</resources>
